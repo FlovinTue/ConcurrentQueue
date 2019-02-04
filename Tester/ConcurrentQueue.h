@@ -764,15 +764,6 @@ inline void CqBuffer<T>::TryRestoreOrder(const uint8_t aBlock)
 #endif
 }
 
-template<class T>
-inline CqBuffer<T>* const CqBuffer<T>::FindTail()
-{
-	CqBuffer<T>* tail(this);
-	while (tail->myTail) {
-		tail = tail->myTail;
-	}
-	return tail;
-}
 template <class T>
 class CqItemContainer
 {
@@ -780,10 +771,13 @@ public:
 	CqItemContainer<T>(const CqItemContainer<T>&) = delete;
 	CqItemContainer<T>& operator=(const CqItemContainer&) = delete;
 
+	inline CqItemContainer();
+
+	inline void Store(const T& aIn, const uint8_t aOrigin);
+	inline void Store(T& aIn, const uint8_t aOrigin);
+
 	inline CqItemContainer<T>& operator=(const T& aData);
 	inline CqItemContainer<T>& operator=(T&& aData);
-
-	inline CqItemContainer();
 
 	inline void Swap(CqItemContainer<T>& aOther);
 
@@ -798,9 +792,23 @@ public:
 	inline void SetReintegrationTag();
 	inline void RemoveReintegrationTag();
 	inline const bool IsTaggedForReintegration();
+
+	inline const uint8_t Origin() const;
 private:
+	static const uint64_t ourPtrMask(uint64_t(UINT32_MAX) << 32 | uint64_t(UINT16_MAX));
+
 	T myData;
-	T* myReference;
+	union
+	{
+		T* myReference;
+		uint64_t myPtrBlock;
+		struct
+		{
+			uint16_t trash[3];
+			uint8_t trashb;
+			uint8_t myOrigin;
+		};
+	};
 };
 
 template<class T>
