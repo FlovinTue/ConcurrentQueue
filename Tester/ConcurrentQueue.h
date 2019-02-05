@@ -478,11 +478,11 @@ private:
 	inline void WriteIn(const size_type aSlot, const uint8_t aBlock, const U& aIn);
 
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U)>* = nullptr>
-	inline void WriteOut(const size_type aLocalSlot, const uint8_t aBlock, U& aOut);
+	inline void WriteOut(const size_type aTotalBlockSlot, U& aOut);
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline void WriteOut(const size_type aLocalSlot, const uint8_t aBlock, U& aOut);
+	inline void WriteOut(const size_type aTotalBlockSlot, U& aOut);
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline void WriteOut(const size_type aLocalSlot, const uint8_t aBlock, U& aOut);
+	inline void WriteOut(const size_type aTotalBlockSlot, U& aOut);
 
 	inline void TryRestoreOrder(const uint8_t aBlock);
 
@@ -626,16 +626,15 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 		return false;
 	}
 
-	const size_type blockCapacity(myCapacity / 2);
 	const size_type readSlotTotal(myReadSlot++);
-	const size_type readSlot(readSlotTotal % blockCapacity);
-	const uint8_t block(static_cast<uint8_t>((readSlotTotal % myCapacity) / blockCapacity));
+	const size_type readSlotBlockTotal(readSlotTotal % myCapacity);
 
-	WriteOut(readSlot, block, aOut);
+	WriteOut(readSlotBlockTotal, aOut);
 
-	const uint8_t origin(myDataBlocks[block][readSlot].Origin());
+	const uint8_t origin(myDataBlocks[0][readSlotBlockTotal].Origin());
 
 	const size_type readEntries(++myPostReadIterator[origin]);
+	const size_type blockCapacity(myCapacity / 2);
 
 	if (readEntries == blockCapacity) {
 		myPostReadIterator[origin].store(0, std::memory_order_release);
@@ -682,26 +681,27 @@ inline void CqBuffer<T>::WriteIn(const size_type aSlot, const uint8_t aBlock, co
 }
 template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U)>*>
-inline void CqBuffer<T>::WriteOut(const size_type aLocalSlot, const uint8_t aBlock, U& aOut)
+inline void CqBuffer<T>::WriteOut(const size_type aTotalBlockSlot, U& aOut)
 {
-	myDataBlocks[aBlock][aLocalSlot].Move(aOut);
+	myDataBlocks[0][aTotalBlockSlot].Move(aOut);
 }
 template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline void CqBuffer<T>::WriteOut(const size_type aLocalSlot, const uint8_t aBlock, U& aOut)
+inline void CqBuffer<T>::WriteOut(const size_type aTotalBlockSlot, U& aOut)
 {
-	myDataBlocks[aBlock][aLocalSlot].Assign(aOut);
+
+	myDataBlocks[0][aTotalBlockSlot].Assign(aOut);
 }
 template <class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline void CqBuffer<T>::WriteOut(const size_type aLocalSlot, const uint8_t aBlock, U& aOut)
+inline void CqBuffer<T>::WriteOut(const size_type aTotalBlockSlot,  U& aOut)
 {
 	try {
-		myDataBlocks[aBlock][aLocalSlot].TryMove(aOut);
+		myDataBlocks[0][aTotalBlockSlot].TryMove(aOut);
 	}
 	catch (...) {
-		myDataBlocks[aBlock][aLocalSlot].SetReintegrationTag();
-		TryRestoreOrder(aBlock);
+		myDataBlocks[0][aTotalBlockSlot].SetReintegrationTag();
+		TryRestoreOrder(0);
 		throw;
 	}
 }
