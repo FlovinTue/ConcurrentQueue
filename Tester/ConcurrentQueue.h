@@ -9,7 +9,7 @@
 // Define to enable basic exception handling in exchange
 // for a slight performance decrease (in some cases)
 #define CQ_ENABLE_EXCEPTIONS 
-//#undef CQ_ENABLE_EXCEPTIONS
+#undef CQ_ENABLE_EXCEPTIONS
 
 #ifdef CQ_ENABLE_EXCEPTIONS 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -793,9 +793,9 @@ public:
 	inline void RemoveReintegrationTag();
 	inline const bool IsTaggedForReintegration();
 
-	inline const uint8_t Origin() const;
+	inline const uint8_t OriginBlock() const;
 private:
-	static const uint64_t ourPtrMask(uint64_t(UINT32_MAX) << 32 | uint64_t(UINT16_MAX));
+	static const uint64_t ourPtrMask = (uint64_t(UINT32_MAX) << 32 | uint64_t(UINT16_MAX));
 
 	T myData;
 	union
@@ -805,8 +805,8 @@ private:
 		struct
 		{
 			uint16_t trash[3];
-			uint8_t trashb;
-			uint8_t myOrigin;
+			uint8_t myOriginBlock;
+			uint8_t myReintegrationTag;
 		};
 	};
 };
@@ -854,21 +854,22 @@ inline void CqItemContainer<T>::Move(T & aOut)
 template<class T>
 inline void CqItemContainer<T>::SetReintegrationTag()
 {
-	const uint64_t tag(uint64_t(1) << 63);
-	const uint64_t val(reinterpret_cast<uint64_t>(myReference) | tag);
-	myReference = reinterpret_cast<T*>(val);
+	myReintegrationTag = 1;
 }
 template<class T>
 inline void CqItemContainer<T>::RemoveReintegrationTag()
 {
-	const uint64_t tag(uint64_t(1) << 63);
-	const uint64_t val(reinterpret_cast<uint64_t>(myReference) & ~tag);
-	myReference = reinterpret_cast<T*>(val);
+	myReintegrationTag = 0;
 }
 template<class T>
 inline const bool CqItemContainer<T>::IsTaggedForReintegration()
 {
-	return reinterpret_cast<uint64_t>(myReference) & uint64_t(1) << 63;
+	return myReintegrationTag;
+}
+template<class T>
+inline const uint8_t CqItemContainer<T>::OriginBlock() const
+{
+	return myOriginBlock;
 }
 template<class T>
 template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
