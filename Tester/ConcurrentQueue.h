@@ -46,6 +46,8 @@ public:
 
 #undef max
 
+// For anonymous struct
+#pragma warning(disable : 4201) 
 
 template <class T>
 class CqBuffer;
@@ -631,11 +633,13 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 
 	WriteOut(readSlot, block, aOut);
 
-	const size_type readEntries(++myPostReadIterator[block]);
+	const uint8_t origin(myDataBlocks[block][readSlot].Origin());
+
+	const size_type readEntries(++myPostReadIterator[origin]);
 
 	if (readEntries == blockCapacity) {
-		myPostReadIterator[block].store(0, std::memory_order_release);
-		myWriteSlot[block] = 0;
+		myPostReadIterator[origin].store(0, std::memory_order_release);
+		myWriteSlot[origin] = 0;
 	}
 
 	return true;
@@ -644,7 +648,7 @@ template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>*>
 inline void CqBuffer<T>::WriteIn(const size_type aSlot, const uint8_t aBlock, U&& aIn)
 {
-	myDataBlocks[aBlock][aSlot] = std::move(aIn);
+	myDataBlocks[aBlock][aSlot].Store(std::move(aIn), aBlock);
 }
 template <class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>*>
@@ -662,7 +666,7 @@ template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_ASSIGN(U)>*>
 inline void CqBuffer<T>::WriteIn(const size_type aSlot, const uint8_t aBlock, const U& aIn)
 {
-	myDataBlocks[aBlock][aSlot] = aIn;
+	myDataBlocks[aBlock][aSlot].Store(aIn, aBlock);
 }
 template <class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_ASSIGN(U)>*>
@@ -763,7 +767,15 @@ inline void CqBuffer<T>::TryRestoreOrder(const uint8_t aBlock)
 	}
 #endif
 }
-
+template<class T>
+inline CqBuffer<T>* const CqBuffer<T>::FindTail()
+{
+	CqBuffer<T>* tail(this);
+	while (tail->myTail) {
+		tail = tail->myTail;
+	}
+	return tail;
+}
 template <class T>
 class CqItemContainer
 {
@@ -774,7 +786,7 @@ public:
 	inline CqItemContainer();
 
 	inline void Store(const T& aIn, const uint8_t aOrigin);
-	inline void Store(T& aIn, const uint8_t aOrigin);
+	inline void Store(T&& aIn, const uint8_t aOrigin);
 
 	inline CqItemContainer<T>& operator=(const T& aData);
 	inline CqItemContainer<T>& operator=(T&& aData);
@@ -793,9 +805,10 @@ public:
 	inline void RemoveReintegrationTag();
 	inline const bool IsTaggedForReintegration();
 
-	inline const uint8_t OriginBlock() const;
+	inline const uint8_t Origin() const;
 private:
-	static const uint64_t ourPtrMask = (uint64_t(UINT32_MAX) << 32 | uint64_t(UINT16_MAX));
+	inline T& Reference() const;
+	static const uint64_t ourPtrMask = (uint64_t(UINT32_MAX) << 16 | uint64_t(UINT16_MAX));
 
 	T myData;
 	union
@@ -805,7 +818,7 @@ private:
 		struct
 		{
 			uint16_t trash[3];
-			uint8_t myOriginBlock;
+			uint8_t myOrigin;
 			uint8_t myReintegrationTag;
 		};
 	};
@@ -818,8 +831,6 @@ inline  CqItemContainer<T>& CqItemContainer<T>::operator=(const T & aData)
 	myReference = &myData;
 	return *this;
 }
-//.	
-
 template<class T>
 inline  CqItemContainer<T>& CqItemContainer<T>::operator=(T && aData)
 {
@@ -835,6 +846,20 @@ inline CqItemContainer<T>::CqItemContainer() :
 {
 }
 template<class T>
+inline void CqItemContainer<T>::Store(const T & aIn, const uint8_t aOrigin)
+{
+	myData = aIn;
+	myReference = &myData;
+	myOrigin = aOrigin;
+}
+template<class T>
+inline void CqItemContainer<T>::Store(T && aIn, const uint8_t aOrigin)
+{
+	myData = std::move(aIn);
+	myReference = &myData;
+	myOrigin = aOrigin;
+}
+template<class T>
 inline void CqItemContainer<T>::Swap(CqItemContainer<T>& aOther)
 {
 	T* const ref(aOther.myReference);
@@ -844,12 +869,12 @@ inline void CqItemContainer<T>::Swap(CqItemContainer<T>& aOther)
 template<class T>
 inline void CqItemContainer<T>::Assign(T & aOut)
 {
-	aOut = *myReference;
+	aOut = Reference();
 }
 template<class T>
 inline void CqItemContainer<T>::Move(T & aOut)
 {
-	aOut = std::move(*myReference);
+	aOut = std::move(Reference());
 }
 template<class T>
 inline void CqItemContainer<T>::SetReintegrationTag()
@@ -867,9 +892,14 @@ inline const bool CqItemContainer<T>::IsTaggedForReintegration()
 	return myReintegrationTag;
 }
 template<class T>
-inline const uint8_t CqItemContainer<T>::OriginBlock() const
+inline const uint8_t CqItemContainer<T>::Origin() const
 {
-	return myOriginBlock;
+	return myOrigin;
+}
+template<class T>
+inline T& CqItemContainer<T>::Reference() const
+{
+	return *reinterpret_cast<T*>(myPtrBlock & ourPtrMask);
 }
 template<class T>
 template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
