@@ -9,7 +9,7 @@
 // Define to enable basic exception handling in exchange
 // for a slight performance decrease (in some cases)
 #define CQ_ENABLE_EXCEPTIONS 
-#undef CQ_ENABLE_EXCEPTIONS
+//#undef CQ_ENABLE_EXCEPTIONS
 
 #ifdef CQ_ENABLE_EXCEPTIONS 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -604,9 +604,9 @@ inline const bool CqBuffer<T>::TryPush(Arg && ...aIn)
 	if (myWriteSlot[block] == blockCapacity)
 		return false;
 
-	const size_type slot(myWriteSlot[block]++);
+	const size_type blockSlot(myWriteSlot[block]++);
 
-	WriteIn(slot, block, std::forward<Arg>(aIn)...);
+	WriteIn(blockSlot, block, std::forward<Arg>(aIn)...);
 
 	std::_Atomic_signal_fence(std::memory_order_seq_cst);
 
@@ -654,7 +654,7 @@ template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>*>
 inline void CqBuffer<T>::WriteIn(const size_type aSlot, const uint8_t aBlock, U&& aIn)
 {
 	try {
-		myDataBlocks[aBlock][aSlot] = std::move(aIn);
+		myDataBlocks[aBlock][aSlot].Store(std::move(aIn), aBlock);
 	}
 	catch (...) {
 		--myWriteSlot[aBlock];
@@ -672,7 +672,7 @@ template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_ASSIGN(U)>*>
 inline void CqBuffer<T>::WriteIn(const size_type aSlot, const uint8_t aBlock, const U& aIn)
 {
 	try {
-		myDataBlocks[aBlock][aSlot] = aIn;
+		myDataBlocks[aBlock][aSlot].Store(aIn, aBlock);
 	}
 	catch (...) {
 		--myWriteSlot[aBlock];
@@ -803,7 +803,7 @@ public:
 
 	inline void SetReintegrationTag();
 	inline void RemoveReintegrationTag();
-	inline const bool IsTaggedForReintegration();
+	inline const bool IsTaggedForReintegration() const;
 
 	inline const uint8_t Origin() const;
 private:
@@ -887,7 +887,7 @@ inline void CqItemContainer<T>::RemoveReintegrationTag()
 	myReintegrationTag = 0;
 }
 template<class T>
-inline const bool CqItemContainer<T>::IsTaggedForReintegration()
+inline const bool CqItemContainer<T>::IsTaggedForReintegration() const
 {
 	return myReintegrationTag;
 }
@@ -905,11 +905,11 @@ template<class T>
 template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
 inline void CqItemContainer<T>::TryMove(U& aOut)
 {
-	aOut = std::move(*myReference);
+	aOut = std::move(Reference());
 }
 template<class T>
 template<class U, std::enable_if_t<!std::is_move_assignable<U>::value>*>
 inline void CqItemContainer<T>::TryMove(U& aOut)
 {
-	aOut = *myReference;
+	aOut = Reference();
 }
