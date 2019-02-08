@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <vector>
+#include <iostream>
 
 // Define to enable basic exception handling in exchange
 // for a slight performance decrease (in some cases)
@@ -711,38 +712,48 @@ inline void CqBuffer<T>::TryReintegrateEntries() {
 		const size_type preReplacementReadIterator(myPreReadIterator.exchange(preReadReplacement));
 		const size_type readReplacementOffset(preReadReplacement - preReplacementReadIterator);
 
-		// Now we need to wait for all variables to add up before continuing
+		// Now we need to wait for all variables to add up before continuing.
+		// First making sure no new threads are entering, using the pre-read
+		// iterator..
 		for (;;) {
 			const size_type preReadIterator(myPreReadIterator.load(std::memory_order_acquire) - readReplacementOffset);
 			if (preReadIterator == myReadSlot.load(std::memory_order_acquire)) {
 				break;
 			}
 		}
+		// Then matching up the readslot and post-read iterator + failed
+		// pop count
 		for (;;) {
 			const size_type readSlot(myReadSlot.load(std::memory_order_acquire));
-			const size_type readSlotBlockTotal(readSlot % myCapacity);
-			const size_type activeBlock(readSlotBlockTotal / blockCapacity);
-			const size_type readSlotBlock(readSlot % blockCapacity);
-			const size_type postReadIterator(myPostReadIterator[activeBlock].load(std::memory_order_acquire));
-			const size_type toMatch(postReadIterator  + myFailedPops.load(std::memory_order_acquire));
+			const size_type lastSlot((readSlot - 1) % myCapacity);
+			const size_type postReadA(myPostReadIterator[0].load(std::memory_order_acquire));
+			const size_type postReadB(myPostReadIterator[1].load(std::memory_order_acquire));
+			const bool isPostReadReset(!static_cast<bool>(postReadA));
+			const size_type resetCompensation(static_cast<size_type>(isPostReadReset) * blockCapacity);
+			const size_type postReadTotal(postReadA + postReadB + resetCompensation);
+			const size_type toMatch(postReadTotal + myFailedPops.load(std::memory_order_acquire));
+			if (resetCompensation) {
+				bool hej = true;
+				hej;
+			}
 
-			if (readSlotBlock == toMatch) {
+			if (toMatch == lastSlot) {
 				size_type movedEntries(0);
 				// And finally, swap the bad entries up front and decrement
 				// all the iterators
-				for (size_type i = readSlotBlockTotal - 1; !(readSlotBlockTotal < i) & (myFailedPops.load(std::memory_order_acquire)); --i) {
+				for (size_type i = lastSlot; !(lastSlot < i) & (myFailedPops.load(std::memory_order_acquire)); --i) {
 					CqItemContainer<T>& current(myDataBlock[i]);
 					if (current.IsTaggedForReintegration()) {
 						current.RemoveReintegrationTag();
+						CqItemContainer<T>& target(myDataBlock[lastSlot - movedEntries]);
+						myDataBlock[i].Swap(target);
 						++movedEntries;
 						myFailedPops.fetch_sub(1, std::memory_order_relaxed);
-						CqItemContainer<T>& target(myDataBlock[readSlotBlockTotal - movedEntries]);
-						myDataBlock[i].Swap(target);
 					}
 				}
 				myRepairSlot.clear();
 
-				// Restore the iterator variables to valid states
+				// Afterwards, restore the iterator variables to valid states
 				myReadSlot.fetch_sub(movedEntries, std::memory_order_release);
 				myPreReadIterator.fetch_sub(movedEntries + readReplacementOffset, std::memory_order_release);
 				break;

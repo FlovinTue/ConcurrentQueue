@@ -11,7 +11,7 @@ const uint32_t BufferSizes = 512;
 const uint32_t TotalBuffer = Buffers * BufferSizes;
 const uint32_t Writes = TotalBuffer;
 const uint32_t Writers = 1;
-const uint32_t Readers = 1;
+const uint32_t Readers = 2;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -97,13 +97,13 @@ inline void Tester<T>::Write()
 	//const T in(static_cast<T>(rand()));
 
 
-	for (int j = 0; j < WritesPerThread; ++j) {
+	for (int j = 0; j < WritesPerThread; ) {
 		try {
 		T in;
 		myQueue.Push(in);
+		++j;
 		}
 		catch (...) {
-
 		}
 
 
@@ -119,12 +119,14 @@ inline void Tester<T>::Read()
 	//T sum(static_cast<T>(0));
 
 	T out;
-	for (int j = 0; j < ReadsPerThread; ++j) {
+	for (int j = 0; j < ReadsPerThread;) {
 		while (true) {
 
 			try {
-			if (myQueue.TryPop(out))
+				if (myQueue.TryPop(out)) {
+					++j;
 				break;
+			}
 			}
 			catch (...) {
 
