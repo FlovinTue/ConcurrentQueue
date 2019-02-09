@@ -10,8 +10,8 @@ const uint32_t Buffers = 4;
 const uint32_t BufferSizes = 512;
 const uint32_t TotalBuffer = Buffers * BufferSizes;
 const uint32_t Writes = TotalBuffer;
-const uint32_t Writers = 1;
-const uint32_t Readers = 2;
+const uint32_t Writers = 8;
+const uint32_t Readers = 16;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -35,16 +35,16 @@ private:
 	ThreadPool myWorker;
 
 	std::atomic<bool> myIsRunning;
-	//std::atomic<T> myWrittenSum;
-	//std::atomic<T> myReadSum;
+	std::atomic<uint32_t> myWrittenSum;
+	std::atomic<uint32_t> myReadSum;
 };
 
 template<class T>
 inline Tester<T>::Tester() :
 	myIsRunning(false),
-	myWorker(Writers + Readers)/*,
+	myWorker(Writers + Readers),
 	myWrittenSum(0),
-	myReadSum(0)*/
+	myReadSum(0)
 {
 	srand(static_cast<uint32_t>(time(0)));
 }
@@ -84,8 +84,8 @@ inline double Tester<T>::ExecuteConcurrent(uint32_t aRuns)
 template<class T>
 inline bool Tester<T>::CheckResults() const
 {
-	//if (myWrittenSum != myReadSum)
-	//	return false;
+	if (myWrittenSum != myReadSum)
+		return false;
 
 	return true;
 }
@@ -94,21 +94,29 @@ inline void Tester<T>::Write()
 {
 	while (!myIsRunning);
 
-	//const T in(static_cast<T>(rand()));
+	uint32_t sum(0);
 
+	//for (int j = 0; j < WritesPerThread; ) {
+	//	T in;
+	//	//in.count = rand();
+	//	in = rand();
+	//	try {
+	//		myQueue.Push(in);
+	//		++j;
+	//		//sum += in.count;
+	//		sum += in;
+	//	}
+	//	catch (...) {
+	//	}
+	//}
+	// myWrittenSum += sum;
 
-	for (int j = 0; j < WritesPerThread; ) {
-		try {
+	for (int j = 0; j < WritesPerThread; ++j) {
 		T in;
 		myQueue.Push(in);
-		++j;
-		}
-		catch (...) {
-		}
-
-
+		sum += in.count;
 	}
-	//myWrittenSum += in * WritesPerThread;
+	myWrittenSum += sum;
 }
 
 template<class T>
@@ -116,24 +124,36 @@ inline void Tester<T>::Read()
 {
 	while (!myIsRunning);
 
-	//T sum(static_cast<T>(0));
+	uint32_t sum(0);
 
 	T out;
-	for (int j = 0; j < ReadsPerThread;) {
-		while (true) {
+	//for (int j = 0; j < ReadsPerThread;) {
+	//	while (true) {
 
-			try {
-				if (myQueue.TryPop(out)) {
-					++j;
+	//		try {
+	//			if (myQueue.TryPop(out)) {
+	//				++j;
+	//				//sum += out.count;
+	//				sum += out;
+	//			break;
+	//		}
+	//		}
+	//		catch (...) {
+
+	//		}
+
+	//	}
+	//}
+	//myReadSum += sumK
+
+	for (int j = 0; j < ReadsPerThread; ++j) {
+		while (true) {
+			if (myQueue.TryPop(out)) {
+				sum += out.count;
 				break;
 			}
-			}
-			catch (...) {
-
-			}
-
 		}
 	}
-	//myReadSum += sum;
+	myReadSum += sum;
 }
 
