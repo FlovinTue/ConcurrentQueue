@@ -96,28 +96,28 @@ inline void Tester<T>::Write()
 
 	uint32_t sum(0);
 
-	//for (int j = 0; j < WritesPerThread; ) {
-	//	T in;
-	//	//in.count = rand();
-	//	in = rand();
-	//	try {
-	//		myQueue.Push(in);
-	//		++j;
-	//		//sum += in.count;
-	//		sum += in;
-	//	}
-	//	catch (...) {
-	//		std::cout << "Caught" << std::endl;
-	//	}
-	//}
-	// myWrittenSum += sum;
-
-	for (int j = 0; j < WritesPerThread; ++j) {
+	for (int j = 0; j < WritesPerThread; ) {
 		T in;
-		myQueue.Push(in);
-		sum += in;
+		//in.count = rand();
+		in = rand();
+		try {
+			myQueue.Push(in);
+			++j;
+			//sum += in.count;
+			sum += in;
+		}
+		catch (...) {
+			std::cout << "Caught" << std::endl;
+		}
 	}
-	myWrittenSum += sum;
+	 myWrittenSum += sum;
+
+	//for (int j = 0; j < WritesPerThread; ++j) {
+	//	T in;
+	//	myQueue.Push(in);
+	//	sum += in;
+	//}
+	//myWrittenSum += sum;
 }
 
 template<class T>
