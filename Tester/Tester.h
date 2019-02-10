@@ -107,7 +107,6 @@ inline void Tester<T>::Write()
 			sum += in;
 		}
 		catch (...) {
-			std::cout << "Caught" << std::endl;
 		}
 	}
 	 myWrittenSum += sum;

@@ -105,7 +105,7 @@ private:
 	inline void CopyProducerBuffersTo(const uint16_t aStoreArraySlot, const uint16_t aNumEntries);
 	inline void PostProducerPushUpdate(const uint16_t aPostIterator);
 
-	inline const uint16_t AcquireStoreSlot();
+	inline const uint16_t ReclaimStoreSlot();
 	inline const bool IsStoreSlotAvaliable(const uint16_t aStoreSlot) const;
 	inline const uint8_t ToStoreArraySlot(const uint16_t aStoreSlot) const;
 	inline const size_type Log2Align(const size_t aFrom, const size_t aClamp) const;
@@ -334,13 +334,17 @@ inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducer
 template<class T>
 inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 {
-	const uint16_t reservedSlot(AcquireStoreSlot());
-
 #ifdef CQ_ENABLE_EXCEPTIONS
+	const uint16_t reclaimedSlot(ReclaimStoreSlot());
+	const bool doPostIteration(reclaimedSlot == std::numeric_limits<uint16_t>::max());
+	const uint16_t reservedSlot(doPostIteration ? myProducerSlotReservation++ : reclaimedSlot);
 	if ((uint16_t(1) << ProducerSlotsMaxGrowthCount < reservedSlot)) {
 		--myProducerSlotReservation;
 		throw ProducerOverflow("Maximum number of producers exceeded");
 	}
+#else
+	const uint16_t reservedSlot(myProducerSlotReservation++);
+	const bool doPostIteration(true);
 #endif
 	const uint16_t storeSlot(static_cast<uint16_t>(log2f(static_cast<float>(reservedSlot))));
 
@@ -362,12 +366,9 @@ inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 	}
 	myProducerArrayStore[storeSlot][reservedSlot] = aBuffer;
 
-	const uint16_t blah(myProducerSlotPostIterator);
-	const uint16_t bloh(myProducerSlotReservation);
-	if (!(blah < bloh))
-		PostProducerPushUpdate(blah);
-	else
-		PostProducerPushUpdate(++myProducerSlotPostIterator);
+	const uint16_t postIteratorIncrement(static_cast<uint16_t>(doPostIteration));
+	const uint16_t postIterator(myProducerSlotPostIterator.fetch_add(postIteratorIncrement));
+	PostProducerPushUpdate(postIterator + postIteratorIncrement);
 }
 // Allocate a buffer array of capacity appropriate to the slot
 // and attempt to swap the current value for the new one
@@ -471,8 +472,9 @@ inline void ConcurrentQueue<T>::PostProducerPushUpdate(const uint16_t aPostItera
 	}
 }
 template<class T>
-inline const uint16_t ConcurrentQueue<T>::AcquireStoreSlot()
+inline const uint16_t ConcurrentQueue<T>::ReclaimStoreSlot()
 {
+	uint16_t returnValue(std::numeric_limits<uint16_t>::max());
 	for (uint16_t i = myLastAvaliableStoreSlot.load(std::memory_order_acquire); i < (myProducerSlotReservation.load(std::memory_order_acquire)); ++i) {
 		const uint8_t storeSlot(ToStoreArraySlot(i));
 		if (!IsStoreSlotAvaliable(i)) {
@@ -492,13 +494,13 @@ inline const uint16_t ConcurrentQueue<T>::AcquireStoreSlot()
 				if (myLastAvaliableStoreSlot.compare_exchange_strong(expected, desired, std::memory_order_release)) {
 					if (IsStoreSlotAvaliable(i)) {
 						std::cout << "Acquired " << i << std::endl;
-						return i;
+						returnValue = i;
 					}
 				}
 			}
 		}
 	}
-	return myProducerSlotReservation.fetch_add(1);
+	return returnValue;
 }
 template<class T>
 inline const bool ConcurrentQueue<T>::IsStoreSlotAvaliable(const uint16_t aStoreSlot) const
