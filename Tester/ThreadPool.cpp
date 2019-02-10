@@ -18,7 +18,7 @@ ThreadPool::~ThreadPool()
 void ThreadPool::AddTask(std::function<void()> aWorkFunction)
 {
 	++myTaskCounter;
-	myTaskQueue.Push(aWorkFunction);
+	myTaskQueue.push(aWorkFunction);
 }
 
 void ThreadPool::Decommission()
@@ -40,7 +40,7 @@ void ThreadPool::Idle()
 	while (myIsInCommission._My_val | (0 < myTaskCounter._My_val))
 	{
 		std::function<void()> task;
-		if (myTaskQueue.TryPop(task))
+		if (myTaskQueue.try_pop(task))
 		{
 			task();
 			--myTaskCounter;

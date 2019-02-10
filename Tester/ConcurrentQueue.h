@@ -22,6 +22,8 @@
 
 #include <atomic>
 #include <vector>
+#include <iostream>
+#include <random>
 
 // Undefine to disable exception handling in exchange
 // for a slight performance increase (in some cases)
@@ -36,7 +38,7 @@
 class ProducerOverflow : public std::runtime_error
 {
 public:
-	ProducerOverflow(const char* aError) : runtime_error(aError){}
+	ProducerOverflow(const char* aError) : runtime_error(aError) {}
 };
 
 #else
@@ -97,8 +99,11 @@ private:
 
 	inline __declspec(restrict)CqBuffer<T>* const CreateProducerBuffer(const size_t aSize) const;
 	inline void PushProducerBuffer(CqBuffer<T>* const aBuffer);
+	inline void TryAllocProducerStoreSlot(const uint16_t aSlot);
 	inline void TrySwapProducerArray(const uint16_t aFromStoreSlot);
-	inline void TrySwapProducerCount(const uint16_t aFromValue);
+	inline void TrySwapProducerCount(const uint16_t aToValue);
+	inline void CopyProducerBuffersTo(const uint16_t aStoreSlot, const uint16_t aNumEntries);
+	inline void PostProducerPushUpdate(const uint16_t aPostIterator);
 
 	inline const size_type Log2Align(const size_t aFrom, const size_t aClamp) const;
 
@@ -119,6 +124,8 @@ private:
 
 	static thread_local uint16_t ourRelocationIndex;
 
+	static CqBuffer<T> ourDummyBuffer;
+
 	std::atomic<CqBuffer<T>**> myProducerArrayStore[ProducerSlotsMaxGrowthCount];
 	std::atomic<CqBuffer<T>**> myProducerSlots;
 	std::atomic<uint16_t> myProducerCount;
@@ -130,18 +137,19 @@ private:
 template <class T>
 std::atomic<typename ConcurrentQueue<T>::size_type> ConcurrentQueue<T>::ourObjectIterator(0);
 template <class T>
-thread_local std::vector<CqBuffer<T>*> ConcurrentQueue<T>::ourProducers(1, nullptr);
+thread_local std::vector<CqBuffer<T>*> ConcurrentQueue<T>::ourProducers;
 template <class T>
-thread_local std::vector<CqBuffer<T>*> ConcurrentQueue<T>::ourConsumers(1, nullptr);
+thread_local std::vector<CqBuffer<T>*> ConcurrentQueue<T>::ourConsumers;
 template <class T>
 thread_local uint16_t ConcurrentQueue<T>::ourRelocationIndex(static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()));
+template <class T>
+CqBuffer<T> ConcurrentQueue<T>::ourDummyBuffer(0, nullptr);
 
 template<class T>
 inline ConcurrentQueue<T>::ConcurrentQueue()
 	: ConcurrentQueue<T>(2)
 {
 }
-
 template<class T>
 inline ConcurrentQueue<T>::ConcurrentQueue(size_type aInitProducerCapacity)
 	: myObjectId(ourObjectIterator++)
@@ -154,13 +162,14 @@ inline ConcurrentQueue<T>::ConcurrentQueue(size_type aInitProducerCapacity)
 	, myProducerArrayStore{ nullptr }
 {
 }
-
 template<class T>
 inline ConcurrentQueue<T>::~ConcurrentQueue()
 {
 	const uint16_t producerCount(myProducerCount.load(std::memory_order_acquire));
 
 	for (uint16_t i = 0; i < producerCount; ++i) {
+		if (myProducerSlots[i] == &ourDummyBuffer)
+			continue;
 		myProducerSlots[i]->DestroyAll();
 	}
 
@@ -210,16 +219,9 @@ const bool ConcurrentQueue<T>::TryPop(T & aOut)
 	const size_t consumerSlot(myObjectId);
 
 	if (!(consumerSlot < ourConsumers.size()))
-		ourConsumers.resize(consumerSlot + 1, nullptr);
+		ourConsumers.resize(consumerSlot + 1, &ourDummyBuffer);
 
 	CqBuffer<T>* buffer = ourConsumers[consumerSlot];
-
-	if (!buffer) {
-		if (!RelocateConsumer())
-			return false;
-
-		buffer = ourConsumers[consumerSlot];
-	}
 
 	for (uint16_t attempt(0); !buffer->TryPop(aOut); ++attempt) {
 		if (!(attempt < myProducerCount.load(std::memory_order_relaxed)))
@@ -275,7 +277,6 @@ inline const bool ConcurrentQueue<T>::RelocateConsumer()
 			return true;
 		}
 	}
-
 	return false;
 }
 template<class T>
@@ -317,7 +318,9 @@ inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducer
 
 	return buffer;
 }
-
+// Find a slot for the buffer in the producer store. Also, update the active producer 
+// array, capacity and producer count as is necessary. In the event a new producer array 
+// needs to be allocated, threads will compete to do so.
 template<class T>
 inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 {
@@ -329,60 +332,60 @@ inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 		throw ProducerOverflow("Maximum number of producers exceeded");
 	}
 #endif
-
 	const uint16_t storeSlot(static_cast<uint16_t>(log2f(static_cast<float>(reservedSlot))));
-	const uint16_t producerCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(storeSlot + 1))));
 
-	// If a producerarray needs to be allocated, threads 
-	// will compete to do so
 	if (!myProducerArrayStore[storeSlot].load(std::memory_order_acquire)) {
-		CqBuffer<T>** const newProducerSlotBlock(new CqBuffer<T>*[producerCapacity]);
-		memset(&newProducerSlotBlock[0], 0, sizeof(CqBuffer<T>*) * producerCapacity);
-
-		CqBuffer<T>** expected(nullptr);
-		if (!myProducerArrayStore[storeSlot].compare_exchange_strong(expected, newProducerSlotBlock)) {
-			delete[] newProducerSlotBlock;
+#ifdef CQ_ENABLE_EXCEPTIONS
+		try {
+#endif
+			TryAllocProducerStoreSlot(storeSlot);
+#ifdef CQ_ENABLE_EXCEPTIONS
 		}
+		catch (...) {
+			const uint16_t postIterator(++myProducerSlotPostIterator);
+			if (myProducerArrayStore[storeSlot].load(std::memory_order_acquire)) {
+				PostProducerPushUpdate(postIterator);
+			}
+			throw;
+		}
+#endif
 	}
 
-	// Store buffer in store first, because this is guaranteed 
-	// to be currently allocated
 	myProducerArrayStore[storeSlot][reservedSlot] = aBuffer;
 
-	const uint16_t reservationCount(myProducerSlotReservation.load(std::memory_order_acquire));
-	const uint16_t postIterator(++myProducerSlotPostIterator);
+	PostProducerPushUpdate(++myProducerSlotPostIterator);
+}
+// Allocate a buffer array of capacity appropriate to the slot
+// and attempt to swap the current value for the new one
+template<class T>
+inline void ConcurrentQueue<T>::TryAllocProducerStoreSlot(const uint16_t aSlot)
+{
+//#ifdef CQ_ENABLE_EXCEPTIONS
+//	std::random_device rd;
+//	std::mt19937 rng(rd());
+//	if (rng() % 5 == 1) {
+//		throw std::runtime_error("Something");
+//	}
+//#endif
+	const uint16_t producerCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(aSlot + 1))));
 
-	// Now, if post iterator matches the current reservation count
-	// that means all the slots that came before this value is inserted
-	// and we can copy all of them into the current top array
-	if (postIterator == reservationCount) {
-		const uint16_t targetStoreSlot(static_cast<uint16_t>(log2f(static_cast<float>(postIterator - 1))));
+	CqBuffer<T>** const newProducerSlotBlock(new CqBuffer<T>*[producerCapacity]);
+	memset(&newProducerSlotBlock[0], 0, sizeof(CqBuffer<T>*) * producerCapacity);
 
-		for (uint16_t i = 0; i < postIterator; ++i) {
-			const uint16_t sourceStoreSlot(static_cast<uint16_t>(log2f(static_cast<float>(i))));
-			myProducerArrayStore[targetStoreSlot][i] = myProducerArrayStore[sourceStoreSlot][i];
-		}
-		// At this point myProducerSlotstore[storeSlot] 
-		// should contain postIterator producers
-
-		// Now we'll try swapping the current producerSlotArray for
-		// the one we are referreing to here. 
-		TrySwapProducerArray(targetStoreSlot);
-		// And update the producer count
-		TrySwapProducerCount(postIterator);
+	CqBuffer<T>** expected(nullptr);
+	if (!myProducerArrayStore[aSlot].compare_exchange_strong(expected, newProducerSlotBlock)) {
+		delete[] newProducerSlotBlock;
 	}
 }
-
+// Try swapping the current producer array for one from the store, and follow up
+// with an attempt to swap the capacity value for the one corresponding to the slot
 template<class T>
 inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint16_t aFromStoreSlot)
 {
 	const uint16_t targetCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(aFromStoreSlot + 1))));
-	// This loop should only
-	// be able to happen ProducerSlotsMaxGrowthCount * 2 times
-	// at most
+
 	for (CqBuffer<T>** expectedProducerArray(myProducerSlots.load(std::memory_order_acquire));; expectedProducerArray = myProducerSlots.load(std::memory_order_acquire)) {
-		// Make sure we're not trying to change a lower array
-		// with a higher one
+
 		bool superceeded(false);
 		for (uint16_t i = aFromStoreSlot + 1; i < ProducerSlotsMaxGrowthCount; ++i) {
 			if (!myProducerSlots.load(std::memory_order_acquire)) {
@@ -393,15 +396,12 @@ inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint16_t aFromStoreSl
 			}
 		}
 		if (superceeded) {
-			// Some other thread beat us to the punch
 			break;
 		}
 		CqBuffer<T>** const desiredProducerArray(myProducerArrayStore[aFromStoreSlot].load(std::memory_order_acquire));
 		if (myProducerSlots.compare_exchange_strong(expectedProducerArray, desiredProducerArray, std::memory_order_release)) {
-			// This loop should only be able to happen 
-			// ProducerSlotsMaxGrowthCount * 2 times at most
+
 			for (uint16_t expectedCapacity(myProducerCapacity.load(std::memory_order_acquire));; expectedCapacity = myProducerCapacity.load(std::memory_order_acquire)) {
-				// Make sure we're not trying to downchange capacity
 				if (!(expectedCapacity < targetCapacity)) {
 					break;
 				}
@@ -413,16 +413,15 @@ inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint16_t aFromStoreSl
 		}
 	}
 }
-
+// Attempt to swap the producer count value for the arg value if the
+// existing one is lower
 template<class T>
-inline void ConcurrentQueue<T>::TrySwapProducerCount(const uint16_t aFromValue)
+inline void ConcurrentQueue<T>::TrySwapProducerCount(const uint16_t aToValue)
 {
-	const uint16_t desired(aFromValue);
-	// This loop should only be able to happen 'desired' amount of times
-	for (uint16_t i = 0; i < desired; ++i) {
+	const uint16_t desired(aToValue);
+	for (uint16_t i = myProducerCount.load(std::memory_order_acquire); i < desired; ++i) {
 
 		if (!(myProducerCount.load(std::memory_order_acquire) < desired)) {
-			// Someone else beat us to the punch
 			break;
 		}
 		uint16_t expected(myProducerCount.load(std::memory_order_acquire));
@@ -431,7 +430,30 @@ inline void ConcurrentQueue<T>::TrySwapProducerCount(const uint16_t aFromValue)
 		}
 	}
 }
+template<class T>
+inline void ConcurrentQueue<T>::CopyProducerBuffersTo(const uint16_t aStoreSlot, const uint16_t aNumEntries)
+{
+	for (uint16_t i = 0; i < aNumEntries; ++i) {
+		const uint16_t sourceStoreSlot(static_cast<uint16_t>(log2f(static_cast<float>(i))));
+		CqBuffer<T>** const sourceArray(myProducerArrayStore[sourceStoreSlot]);
+		CqBuffer<T>* const sourceEntry(sourceArray ? sourceArray[i] : nullptr);
+		myProducerArrayStore[aStoreSlot][i] = sourceEntry ? sourceEntry : &ourDummyBuffer;
+	}
+}
+template<class T>
+inline void ConcurrentQueue<T>::PostProducerPushUpdate(const uint16_t aPostIterator)
+{
+	const uint16_t reservationCount(myProducerSlotReservation.load(std::memory_order_acquire));
 
+	if (aPostIterator == reservationCount) {
+		const uint16_t targetStoreSlot(static_cast<uint16_t>(log2f(static_cast<float>(aPostIterator - 1))));
+
+		CopyProducerBuffersTo(targetStoreSlot, aPostIterator);
+
+		TrySwapProducerArray(targetStoreSlot);
+		TrySwapProducerCount(aPostIterator);
+	}
+}
 template<class T>
 inline const typename ConcurrentQueue<T>::size_type ConcurrentQueue<T>::Log2Align(const size_t aFrom, const size_t aClamp) const
 {
@@ -469,9 +491,9 @@ public:
 	// Searches the buffer list towards the front for
 	// the first buffer containing entries
 	inline CqBuffer<T>* const FindBack();
-	// Pushes a buffer to the front of the buffer
-	// list. Used for newly allocated buffers.
-	inline void PushFront(CqBuffer<T>* const aNewCluster);
+	// Pushes a newly allocated buffer buffer to the front of the 
+	// buffer list
+	inline void PushFront(CqBuffer<T>* const aNewBuffer);
 private:
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>* = nullptr>
 	inline void WriteIn(const size_type aSlot, U&& aIn);
@@ -493,24 +515,22 @@ private:
 
 	inline CqBuffer<T>* const FindTail();
 
-	CqBuffer<T>* myNext;
+	size_type myPostWriteIterator;
+	size_type myWriteSlot[2];
+
 	CqBuffer<T>* myTail;
+	CqBuffer<T>* myNext;
 
 	const size_type myCapacity;
-
-	CACHELINE_PADDING(myCapacity);
 	CqItemContainer<T>* const myDataBlock;
+
 	CACHELINE_PADDING(CqItemContainer<T>*);
-	std::atomic<size_type> myReadSlot;
-	CACHELINE_PADDING(size_type);
+	CACHELINE_PADDING(CqItemContainer<T>*);
 	std::atomic<size_type> myPostReadIterator[2];
 	CACHELINE_PADDING(size_type[2]);
-	std::atomic<size_type> myPreReadIterator;
+	std::atomic<size_type> myReadSlot;
 	CACHELINE_PADDING(size_type);
-	size_type myWriteSlot[2];
-	CACHELINE_PADDING(size_type[2]);
-	size_type myPostWriteIterator;
-
+	std::atomic<size_type> myPreReadIterator;
 
 #ifdef CQ_ENABLE_EXCEPTIONS
 	std::atomic<size_type> myFailedPops;
@@ -805,6 +825,9 @@ inline CqBuffer<T>* const CqBuffer<T>::FindTail()
 	}
 	return tail;
 }
+
+// Class used to be able to redirect access to data in the event
+// of an exception being thrown during a pop
 template <class T>
 class CqItemContainer
 {
@@ -842,7 +865,7 @@ private:
 		T* myReference;
 		uint64_t myPtrBlock;
 
-	// For anonymous struct
+		// For anonymous struct
 #pragma warning(push)
 #pragma warning(disable : 4201) 
 		struct

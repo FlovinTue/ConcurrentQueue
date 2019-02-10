@@ -107,6 +107,7 @@ inline void Tester<T>::Write()
 	//		sum += in;
 	//	}
 	//	catch (...) {
+	//		std::cout << "Caught" << std::endl;
 	//	}
 	//}
 	// myWrittenSum += sum;
@@ -114,7 +115,7 @@ inline void Tester<T>::Write()
 	for (int j = 0; j < WritesPerThread; ++j) {
 		T in;
 		myQueue.Push(in);
-		sum += in.count;
+		sum += in;
 	}
 	myWrittenSum += sum;
 }
@@ -144,12 +145,12 @@ inline void Tester<T>::Read()
 
 	//	}
 	//}
-	//myReadSum += sumK
+	//myReadSum += sum
 
 	for (int j = 0; j < ReadsPerThread; ++j) {
 		while (true) {
 			if (myQueue.TryPop(out)) {
-				sum += out.count;
+				sum += out;
 				break;
 			}
 		}

@@ -4,7 +4,7 @@
 #include <thread>
 #include "ConcurrentQueue.h"
 #include <atomic>
-
+#include <concurrent_queue.h>
 class ThreadPool
 {
 public:
@@ -20,7 +20,8 @@ private:
 
 	std::vector<std::thread> myThreads;
 
-	ConcurrentQueue<std::function<void()>> myTaskQueue;
+	concurrency::concurrent_queue<std::function<void()>> myTaskQueue;
+	//ConcurrentQueue<std::function<void()>> myTaskQueue;
 
 	std::atomic<bool> myIsInCommission;
 
