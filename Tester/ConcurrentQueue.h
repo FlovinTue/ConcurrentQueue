@@ -346,7 +346,7 @@ inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 	const uint16_t reservedSlot(myProducerSlotReservation++);
 	const bool doPostIteration(true);
 #endif
-	const uint16_t storeSlot(static_cast<uint16_t>(log2f(static_cast<float>(reservedSlot))));
+	const uint16_t storeSlot(ToStoreArraySlot(reservedSlot));
 
 	if (!myProducerArrayStore[storeSlot].load(std::memory_order_acquire)) {
 #ifdef CQ_ENABLE_EXCEPTIONS
