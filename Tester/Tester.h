@@ -10,8 +10,8 @@ const uint32_t Buffers = 4;
 const uint32_t BufferSizes = 512;
 const uint32_t TotalBuffer = Buffers * BufferSizes;
 const uint32_t Writes = TotalBuffer;
-const uint32_t Writers = 8;
-const uint32_t Readers = 16;
+const uint32_t Writers = 1;
+const uint32_t Readers = 1;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
