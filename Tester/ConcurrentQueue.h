@@ -22,8 +22,6 @@
 
 #include <atomic>
 #include <vector>
-#include <iostream>
-#include <random>
 
 // Undefine to disable exception handling in exchange
 // for a slight performance increase (in some cases)
@@ -58,6 +56,10 @@ public:
 // an array of uint8_t that pads to next cache line
 #define CACHELINE_PADDING(aPreviousBlock) const uint8_t MAKE_UNIQUE_NAME(myPadding)[64 - (sizeof (aPreviousBlock) % 64)] {}
 
+// For anonymous struct
+#pragma warning(push)
+#pragma warning(disable : 4201) 
+
 #undef max
 
 template <class T>
@@ -69,7 +71,7 @@ class CqItemContainer;
 // The WizardLoaf ConcurrentQueue 
 // Made for the x86/x64 architecture in Visual Studio 2017, focusing
 // on performance. The Queue preserves the FIFO property within the 
-// context of single producers. Push operations are(not right now)wait-free, TryPop & Size 
+// context of single producers. Push operations are wait-free, TryPop & Size 
 // are lock-free and producer capacities grows dynamically
 template <class T>
 class ConcurrentQueue
@@ -102,7 +104,6 @@ private:
 	inline void TryAllocProducerStoreSlot(const uint16_t aStoreArraySlot);
 	inline void TrySwapProducerArray(const uint16_t aFromStoreArraySlot);
 	inline void TrySwapProducerCount(const uint16_t aToValue);
-	inline void CopyProducerBuffersTo(const uint16_t aStoreArraySlot, const uint16_t aNumEntries);
 
 	inline const uint16_t ClaimStoreSlot();
 	inline CqBuffer<T>* const FetchFromStore(const uint16_t aStoreSlot) const;
@@ -212,7 +213,6 @@ inline void ConcurrentQueue<T>::Push(Arg ...aIn)
 		InitProducer();
 		buffer = ourProducers[producerSlot];
 	}
-
 	if (!buffer->TryPush(std::forward<Arg>(aIn)...)) {
 		CqBuffer<T>* const next(CreateProducerBuffer(size_t(buffer->Capacity()) * 2));
 		buffer->PushFront(next);
@@ -224,7 +224,6 @@ template<class T>
 const bool ConcurrentQueue<T>::TryPop(T & aOut)
 {
 	const size_t consumerSlot(myObjectId);
-
 	if (!(consumerSlot < ourConsumers.size()))
 		ourConsumers.resize(consumerSlot + 1, &ourDummyBuffer);
 
@@ -299,7 +298,6 @@ inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducer
 	const size_t bufferOffset(0);
 	const size_t dataBlockOffset(bufferOffset + bufferSize);
 
-
 	uint8_t* totalBlock(nullptr);
 	CqBuffer<T>* buffer(nullptr);
 	CqItemContainer<T>* data(nullptr);
@@ -308,19 +306,17 @@ inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducer
 
 #ifdef CQ_ENABLE_EXCEPTIONS
 	try {
+#endif
 		totalBlock = new uint8_t[totalBlockSize + alignmentPadding];
 
 		data = new (totalBlock + dataBlockOffset) CqItemContainer<T>[size];
 		buffer = new(totalBlock + bufferOffset) CqBuffer<T>(static_cast<size_type>(size), data);
+#ifdef CQ_ENABLE_EXCEPTIONS
 	}
 	catch (...) {
 		delete[] totalBlock;
 		throw;
 	}
-#else
-	totalBlock = new uint8_t[totalBlockSize + alignmentPadding];
-	data = new (totalBlock + dataBlockOffset) CqItemContainer<T>[size];
-	buffer = new(totalBlock + bufferOffset) CqBuffer<T>(static_cast<size_type>(size), data);
 #endif
 
 	return buffer;
@@ -332,18 +328,24 @@ template<class T>
 inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 {
 	const uint16_t reservedSlot(ClaimStoreSlot());
-	
+
 	InsertToStore(aBuffer, reservedSlot);
 
 	const uint16_t numReserved(myProducerSlotReservation.load(std::memory_order_acquire));
 	const uint16_t postIterator(++myProducerSlotPostIterator);
 
 	if (postIterator == numReserved) {
-		const uint8_t targetStoreSlot(ToStoreArraySlot(postIterator - 1));
+		for (uint16_t i = 0; i < postIterator; ++i) {
 
-		CopyProducerBuffersTo(targetStoreSlot, postIterator);
+			InsertToStore(FetchFromStore(i), i);
+		}
+		for (uint8_t i = ProducerSlotsMaxGrowthCount - 1; i < ProducerSlotsMaxGrowthCount; --i) {
+			if (myProducerArrayStore[i]) {
 
-		TrySwapProducerArray(targetStoreSlot);
+				TrySwapProducerArray(i);
+				break;
+			}
+		}
 		TrySwapProducerCount(postIterator);
 	}
 }
@@ -352,13 +354,6 @@ inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 template<class T>
 inline void ConcurrentQueue<T>::TryAllocProducerStoreSlot(const uint16_t aStoreArraySlot)
 {
-#ifdef CQ_ENABLE_EXCEPTIONS
-	std::random_device rd;
-	std::mt19937 rng(rd());
-	if (rng() % 5 == 1) {
-		throw std::runtime_error("Something");
-	}
-#endif
 	const uint16_t producerCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(aStoreArraySlot + 1))));
 
 	CqBuffer<T>** const newProducerSlotBlock(new CqBuffer<T>*[producerCapacity]);
@@ -376,11 +371,13 @@ inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint16_t aFromStoreSl
 {
 	const uint16_t targetCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(aFromStoreSlot + 1))));
 
+
 	for (CqBuffer<T>** expectedProducerArray(myProducerSlots.load(std::memory_order_acquire));; expectedProducerArray = myProducerSlots.load(std::memory_order_acquire)) {
 
 		bool superceeded(false);
 		for (uint16_t i = aFromStoreSlot + 1; i < ProducerSlotsMaxGrowthCount; ++i) {
 			if (!myProducerSlots.load(std::memory_order_acquire)) {
+
 				break;
 			}
 			if (expectedProducerArray == myProducerArrayStore[i]) {
@@ -395,6 +392,7 @@ inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint16_t aFromStoreSl
 
 			for (uint16_t expectedCapacity(myProducerCapacity.load(std::memory_order_acquire));; expectedCapacity = myProducerCapacity.load(std::memory_order_acquire)) {
 				if (!(expectedCapacity < targetCapacity)) {
+
 					break;
 				}
 				if (myProducerCapacity.compare_exchange_strong(expectedCapacity, targetCapacity, std::memory_order_release)) {
@@ -412,7 +410,6 @@ inline void ConcurrentQueue<T>::TrySwapProducerCount(const uint16_t aToValue)
 {
 	const uint16_t desired(aToValue);
 	for (uint16_t i = myProducerCount.load(std::memory_order_acquire); i < desired; ++i) {
-
 		if (!(myProducerCount.load(std::memory_order_acquire) < desired)) {
 			break;
 		}
@@ -423,14 +420,6 @@ inline void ConcurrentQueue<T>::TrySwapProducerCount(const uint16_t aToValue)
 	}
 }
 template<class T>
-inline void ConcurrentQueue<T>::CopyProducerBuffersTo(const uint16_t aStoreArraySlot, const uint16_t aNumEntries)
-{
-	CqBuffer<T>** const storeArray(myProducerArrayStore[aStoreArraySlot]);
-	for (uint16_t i = 0; i < aNumEntries; ++i) {
-		storeArray[i] = FetchFromStore(i);
-	}
-}
-template<class T>
 inline const uint16_t ConcurrentQueue<T>::ClaimStoreSlot()
 {
 #ifdef CQ_ENABLE_EXCEPTIONS
@@ -438,9 +427,9 @@ inline const uint16_t ConcurrentQueue<T>::ClaimStoreSlot()
 
 	const uint8_t minimumStoreArraySlot(ToStoreArraySlot(preIteration));
 	if (!myProducerArrayStore[minimumStoreArraySlot].load(std::memory_order_acquire)) {
+
 		TryAllocProducerStoreSlot(minimumStoreArraySlot);
 	}
-
 	return myProducerSlotReservation.fetch_add(1);
 #else
 	const uint16_t reservedSlot(myProducerSlotReservation.fetch_add(1));
@@ -473,6 +462,7 @@ inline void ConcurrentQueue<T>::InsertToStore(CqBuffer<T>* const aBuffer, const 
 	for (uint8_t i = ProducerSlotsMaxGrowthCount - 1; i < ProducerSlotsMaxGrowthCount; --i) {
 		CqBuffer<T>** const producerArray(myProducerArrayStore[i]);
 		if (!producerArray) {
+
 			continue;
 		}
 		producerArray[aStoreSlot] = aBuffer;
@@ -665,6 +655,7 @@ inline const bool CqBuffer<T>::TryPush(Arg && ...aIn)
 	if (myWriteSlot[section] == sectionCapacity)
 		return false;
 
+
 	const size_type sectionSlot(myWriteSlot[section]++);
 	const size_type sectionOffset(sectionCapacity * section);
 	const size_type slot(sectionOffset + sectionSlot);
@@ -687,6 +678,7 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 		return false;
 	}
 
+
 	const size_type readSlotTotal(myReadSlot++);
 	const size_type readSlotBlockTotal(readSlotTotal % myCapacity);
 
@@ -698,6 +690,7 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 	const size_type targetReadEntries(sectionCapacity - 1);
 	const size_type readEntriesBlockTotal(myPostReadIterator[origin]++);
 	const size_type readEntriesBlock(readEntriesBlockTotal % sectionCapacity);
+
 
 	if (readEntriesBlock == targetReadEntries) {
 		myWriteSlot[origin] = 0;
@@ -786,7 +779,7 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 
 	// Designate first thread to enter the repairman, 
 	// and throw everyone else out
-	const bool isClaimed(myRepairSlot.test_and_set());
+	const bool isClaimed(myRepairSlot._and_set());
 
 	if (!isClaimed) {
 		const size_type sectionCapacity(myCapacity / 2);
@@ -896,17 +889,12 @@ private:
 	{
 		T* myReference;
 		uint64_t myPtrBlock;
-
-		// For anonymous struct
-#pragma warning(push)
-#pragma warning(disable : 4201) 
 		struct
 		{
 			uint16_t trash[3];
 			uint8_t myOrigin;
 			uint8_t myReintegrationTag;
 		};
-#pragma warning(pop)
 	};
 };
 template<class T>
@@ -983,3 +971,4 @@ inline void CqItemContainer<T>::TryMove(U& aOut)
 {
 	aOut = Reference();
 }
+#pragma warning(pop)

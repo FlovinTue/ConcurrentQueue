@@ -5,13 +5,9 @@
 #include "ConcurrentQueue.h"
 #include "Timer.h"
 
-
-const uint32_t Buffers = 4;
-const uint32_t BufferSizes = 512;
-const uint32_t TotalBuffer = Buffers * BufferSizes;
-const uint32_t Writes = TotalBuffer;
-const uint32_t Writers = 1;
-const uint32_t Readers = 1;
+const uint32_t Writes = 2048;
+const uint32_t Writers = 8;
+const uint32_t Readers = 16;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -60,6 +56,7 @@ inline double Tester<T>::ExecuteConcurrent(uint32_t aRuns)
 	double result(0.0);
 
 	for (uint32_t i = 0; i < aRuns; ++i) {
+
 		for (uint32_t j = 0; j < Writers; ++j)
 			myWorker.AddTask(std::bind(&Tester::Write, this));
 		for (uint32_t j = 0; j < Readers; ++j)
@@ -96,27 +93,27 @@ inline void Tester<T>::Write()
 
 	uint32_t sum(0);
 
-	for (int j = 0; j < WritesPerThread; ) {
-		T in;
-		//in.count = rand();
-		in = rand();
-		try {
-			myQueue.Push(in);
-			++j;
-			//sum += in.count;
-			sum += in;
-		}
-		catch (...) {
-		}
-	}
-	 myWrittenSum += sum;
-
-	//for (int j = 0; j < WritesPerThread; ++j) {
+	//for (int j = 0; j < WritesPerThread; ) {
 	//	T in;
-	//	myQueue.Push(in);
-	//	sum += in;
+	//	//in.count = rand();
+	//	in = rand();
+	//	try {
+	//		myQueue.Push(in);
+	//		++j;
+	//		//sum += in.count;
+	//		sum += in;
+	//	}
+	//	catch (...) {
+	//	}
 	//}
-	//myWrittenSum += sum;
+	// myWrittenSum += sum;
+
+	for (int j = 0; j < WritesPerThread; ++j) {
+		T in;
+		myQueue.Push(in);
+		sum += in;
+	}
+	myWrittenSum += sum;
 }
 
 template<class T>
