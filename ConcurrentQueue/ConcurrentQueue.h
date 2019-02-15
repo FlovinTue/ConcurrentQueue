@@ -535,11 +535,16 @@ private:
 
 	inline void TryReintegrateEntries();
 
+	// Searches the buffer list towards the back for
+	// the last node
 	inline CqBuffer<T>* const FindTail();
 
 	size_type myPostWriteIterator;
 	size_type myWriteSlot[2];
 
+	// The tail becomes the de-facto storage place for 
+	// unused buffers, until they are destroyed with the 
+	// entire structure
 	CqBuffer<T>* myTail;
 	CqBuffer<T>* myNext;
 
@@ -771,14 +776,23 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 		throw;
 	}
 }
+
+// In the event an exception is thrown during a pop operation
+// this method is used to make the entries avaliable for popping
+// again. 
+// The first thread to claim the 'repairman slot' will begin by 
+// making the queue unenterable for external consumers, after which
+// it waits until all others have exited. It then proceeds to search
+// the buffer backwards, swapping the failed up front as it goes, 
+// until the failed pop count is zero. Afterwards the original state
+// of the iterators is restored, making the buffer once again attractive
+// to consumers
 template<class T>
 inline void CqBuffer<T>::TryReintegrateEntries()
 {
 #ifdef CQ_ENABLE_EXCEPTIONS
 	myFailedPops.fetch_add(1, std::memory_order_release);
 
-	// Designate first thread to enter the repairman, 
-	// and throw everyone else out
 	const bool isClaimed(myRepairSlot._and_set());
 
 	if (!isClaimed) {
@@ -790,17 +804,12 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 		const size_type preReplacementReadIterator(myPreReadIterator.exchange(preReadReplacement));
 		const size_type readReplacementOffset(preReadReplacement - preReplacementReadIterator);
 
-		// Now we need to wait for all variables to add up before continuing.
-		// First making sure no new threads are entering, using the pre-read
-		// iterator..
 		for (;;) {
 			const size_type preReadIterator(myPreReadIterator.load(std::memory_order_acquire) - readReplacementOffset);
 			if (preReadIterator == myReadSlot.load(std::memory_order_acquire)) {
 				break;
 			}
 		}
-		// Then matching up the readslot and post-read iterator + failed
-		// pop count
 		for (;;) {
 			const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 			const size_type postReadA(myPostReadIterator[0].load(std::memory_order_acquire));
@@ -810,8 +819,6 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 
 			if (toMatch == readSlotTotal) {
 				size_type movedEntries(0);
-				// And finally, swap the bad entries up front and decrement
-				// all the iterators
 				const size_type lastSlotTotal(readSlotTotal - 1);
 				const size_type lastSlot(lastSlotTotal % myCapacity);
 				const size_type lastSlotBlock(lastSlot % sectionCapacity);
@@ -832,7 +839,6 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 				}
 				myRepairSlot.clear();
 
-				// Afterwards, restore the iterator variables to valid states
 				myReadSlot.fetch_sub(movedEntries, std::memory_order_release);
 				myPreReadIterator.fetch_sub(movedEntries + readReplacementOffset, std::memory_order_release);
 				break;
@@ -852,7 +858,7 @@ inline CqBuffer<T>* const CqBuffer<T>::FindTail()
 }
 
 // Class used to be able to redirect access to data in the event
-// of an exception being thrown during a pop
+// of an exception being thrown
 template <class T>
 class CqItemContainer
 {
@@ -882,7 +888,7 @@ public:
 	inline const uint8_t Origin() const;
 private:
 	inline T& Reference() const;
-	static const uint64_t ourPtrMask = (uint64_t(UINT32_MAX) << 16 | uint64_t(UINT16_MAX));
+	static const uint64_t ourPtrMask = (uint64_t(std::numeric_limits<uint32_t>::max()) << 16 | uint64_t(std::numeric_limits<uint16_t>::max()));
 
 	T myData;
 	union
