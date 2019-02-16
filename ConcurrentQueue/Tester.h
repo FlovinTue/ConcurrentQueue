@@ -109,7 +109,7 @@ inline void Tester<T>::Write()
 	// myWrittenSum += sum;
 
 	for (int j = 0; j < WritesPerThread; ++j) {
-		T in;
+		const T in(1);
 		myQueue.Push(in);
 		sum += in;
 	}
