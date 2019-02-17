@@ -23,6 +23,15 @@
 #include <atomic>
 #include <vector>
 
+// For testing ---
+#include <random>
+#include <mutex>
+#include <iostream>
+
+#define TEST_SLEEP {std::random_device rd; std::mt19937 rng(rd()); if (rng() % 10 == 1) std::this_thread::sleep_for(std::chrono::microseconds(1));}
+#define TEST_THROW {std::random_device rd; std::mt19937 rng(rd()); if (rng() % 10 == 1) throw std::runtime_error("Test");}
+// ---------------
+
 // Undefine to disable exception handling in exchange
 // for a slight performance increase (in some cases)
 #define CQ_ENABLE_EXCEPTIONS 
@@ -52,7 +61,6 @@ public:
 #define MAKE_UNIQUE_NAME(prefix) _EXPAND_AND_CONCAT_(prefix, __COUNTER__)
 #endif
 
-
 #define CQ_PADDING(bytes) const uint8_t MAKE_UNIQUE_NAME(trash)[bytes] {}
 
 // For anonymous struct
@@ -60,6 +68,7 @@ public:
 #pragma warning(disable : 4201) 
 
 #undef max
+#undef min
 
 template <class T>
 class CqBuffer;
@@ -100,8 +109,8 @@ private:
 
 	inline __declspec(restrict)CqBuffer<T>* const CreateProducerBuffer(const size_t aSize) const;
 	inline void PushProducerBuffer(CqBuffer<T>* const aBuffer);
-	inline void TryAllocProducerStoreSlot(const uint16_t aStoreArraySlot);
-	inline void TrySwapProducerArray(const uint16_t aFromStoreArraySlot);
+	inline void TryAllocProducerStoreSlot(const uint8_t aStoreArraySlot);
+	inline void TrySwapProducerArray(const uint8_t aFromStoreArraySlot);
 	inline void TrySwapProducerCount(const uint16_t aToValue);
 
 	inline const uint16_t ClaimStoreSlot();
@@ -330,12 +339,11 @@ inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 
 	InsertToStore(aBuffer, reservedSlot);
 
-	const uint16_t numReserved(myProducerSlotReservation.load(std::memory_order_acquire));
 	const uint16_t postIterator(++myProducerSlotPostIterator);
+	const uint16_t numReserved(myProducerSlotReservation.load(std::memory_order_acquire));
 
 	if (postIterator == numReserved) {
 		for (uint16_t i = 0; i < postIterator; ++i) {
-
 			InsertToStore(FetchFromStore(i), i);
 		}
 		for (uint8_t i = ProducerSlotsMaxGrowthCount - 1; i < ProducerSlotsMaxGrowthCount; --i) {
@@ -351,7 +359,7 @@ inline void ConcurrentQueue<T>::PushProducerBuffer(CqBuffer<T>* const aBuffer)
 // Allocate a buffer array of capacity appropriate to the slot
 // and attempt to swap the current value for the new one
 template<class T>
-inline void ConcurrentQueue<T>::TryAllocProducerStoreSlot(const uint16_t aStoreArraySlot)
+inline void ConcurrentQueue<T>::TryAllocProducerStoreSlot(const uint8_t aStoreArraySlot)
 {
 	const uint16_t producerCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(aStoreArraySlot + 1))));
 
@@ -366,26 +374,24 @@ inline void ConcurrentQueue<T>::TryAllocProducerStoreSlot(const uint16_t aStoreA
 // Try swapping the current producer array for one from the store, and follow up
 // with an attempt to swap the capacity value for the one corresponding to the slot
 template<class T>
-inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint16_t aFromStoreSlot)
+inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint8_t aFromStoreArraySlot)
 {
-	const uint16_t targetCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(aFromStoreSlot + 1))));
-
+	const uint16_t targetCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(aFromStoreArraySlot + 1))));
 	for (CqBuffer<T>** expectedProducerArray(myProducerSlots.load(std::memory_order_acquire));; expectedProducerArray = myProducerSlots.load(std::memory_order_acquire)) {
 
 		bool superceeded(false);
-		for (uint16_t i = aFromStoreSlot + 1; i < ProducerSlotsMaxGrowthCount; ++i) {
+		for (uint8_t i = aFromStoreArraySlot + 1; i < ProducerSlotsMaxGrowthCount; ++i) {
 			if (!myProducerSlots.load(std::memory_order_acquire)) {
-
 				break;
 			}
-			if (expectedProducerArray == myProducerArrayStore[i]) {
+			if (myProducerArrayStore[i]) {
 				superceeded = true;
 			}
 		}
 		if (superceeded) {
 			break;
 		}
-		CqBuffer<T>** const desiredProducerArray(myProducerArrayStore[aFromStoreSlot].load(std::memory_order_acquire));
+		CqBuffer<T>** const desiredProducerArray(myProducerArrayStore[aFromStoreArraySlot].load(std::memory_order_acquire));
 		if (myProducerSlots.compare_exchange_strong(expectedProducerArray, desiredProducerArray, std::memory_order_release)) {
 
 			for (uint16_t expectedCapacity(myProducerCapacity.load(std::memory_order_acquire));; expectedCapacity = myProducerCapacity.load(std::memory_order_acquire)) {
@@ -407,11 +413,9 @@ template<class T>
 inline void ConcurrentQueue<T>::TrySwapProducerCount(const uint16_t aToValue)
 {
 	const uint16_t desired(aToValue);
-	for (uint16_t i = myProducerCount.load(std::memory_order_acquire); i < desired; ++i) {
-		if (!(myProducerCount.load(std::memory_order_acquire) < desired)) {
-			break;
-		}
-		uint16_t expected(myProducerCount.load(std::memory_order_acquire));
+	for (uint16_t i = myProducerCount.load(std::memory_order_acquire); i < desired; i = myProducerCount.load(std::memory_order_acquire)) {
+		uint16_t expected(i);
+
 		if (myProducerCount.compare_exchange_strong(expected, desired, std::memory_order_release)) {
 			break;
 		}
@@ -422,11 +426,17 @@ inline const uint16_t ConcurrentQueue<T>::ClaimStoreSlot()
 {
 #ifdef CQ_ENABLE_EXCEPTIONS
 	const uint16_t preIteration(myProducerSlotPreIterator++);
-
 	const uint8_t minimumStoreArraySlot(ToStoreArraySlot(preIteration));
-	if (!myProducerArrayStore[minimumStoreArraySlot].load(std::memory_order_acquire)) {
+	const uint8_t minimumStoreArraySlotClamp(std::min<uint8_t>(minimumStoreArraySlot, ProducerSlotsMaxGrowthCount - 1));
 
-		TryAllocProducerStoreSlot(minimumStoreArraySlot);
+	if (!myProducerArrayStore[minimumStoreArraySlotClamp].load(std::memory_order_acquire)) {
+		try {
+			TryAllocProducerStoreSlot(minimumStoreArraySlotClamp);
+		}
+		catch (...) {
+			--myProducerSlotPreIterator;
+			throw;
+		}
 	}
 	return myProducerSlotReservation.fetch_add(1);
 #else
@@ -437,7 +447,7 @@ inline const uint16_t ConcurrentQueue<T>::ClaimStoreSlot()
 	}
 	return reservedSlot;
 #endif
-}
+		}
 template<class T>
 inline CqBuffer<T>* const ConcurrentQueue<T>::FetchFromStore(const uint16_t aStoreSlot) const
 {
@@ -538,6 +548,7 @@ private:
 
 	size_type myWriteSlot;
 	size_type myPostWriteIterator;
+
 	// The tail becomes the de-facto storage place for 
 	// unused buffers, until they are destroyed with the 
 	// entire structure
@@ -556,7 +567,6 @@ private:
 	std::atomic_flag myRepairSlot;
 #endif
 };
-
 template<class T>
 inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* const aDataBlock)
 	: myNext(nullptr)
