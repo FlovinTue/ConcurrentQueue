@@ -793,36 +793,31 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 			else
 				std::this_thread::yield();
 		}
-		for (;;) {
-			const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
+	
+		const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 
-			size_type movedEntries(0);
-			const size_type lastSlotTotal(readSlotTotal - 1);
-			const size_type lastSlot(lastSlotTotal % myCapacity);
-
-			for (size_type i = 0; (i != myCapacity * 2) & (myFailedItems.load(std::memory_order_relaxed) != 0); ++i) {
-				const size_type currentIndex((lastSlot - i) % myCapacity);
-				CqItemContainer<T>& current(myDataBlock[currentIndex]);
-
-				if (current.GetState() == CqItemState::Valid) {
-					std::this_thread::yield();
-					--i;
-					continue;
-				};
-				if (current.GetState() == CqItemState::Failed) {
-					current.SetState(CqItemState::Valid);
-					const size_type targetIndex((lastSlot - movedEntries) % myCapacity);
-					CqItemContainer<T>& target(myDataBlock[targetIndex]);
-					myDataBlock[currentIndex].Swap(target);
-					++movedEntries;
-					myFailedItems.fetch_sub(1, std::memory_order_relaxed);
-				}
+		size_type movedEntries(0);
+		const size_type lastSlotTotal(readSlotTotal - 1);
+		const size_type lastSlot(lastSlotTotal % myCapacity);
+		for (size_type i = 0; (0 < myFailedItems.load(std::memory_order_relaxed)); ++i) {
+			const size_type currentIndex((lastSlot - i) % myCapacity);
+			CqItemContainer<T>& current(myDataBlock[currentIndex]);
+			if (current.GetState() == CqItemState::Valid) {
+				std::this_thread::yield();
+				--i;
+				continue;
+			};
+			const size_type targetIndex((lastSlot - movedEntries) % myCapacity);
+			CqItemContainer<T>& target(myDataBlock[targetIndex]);
+			if (current.GetState() == CqItemState::Failed) {
+				target.Redirect(current);
+				++movedEntries;
+				myFailedItems.fetch_sub(1, std::memory_order_relaxed);
 			}
-			myRepairSlot.clear(std::memory_order_release);
-			myReadSlot.fetch_sub(movedEntries, std::memory_order_release);
-			myPreReadIterator.fetch_sub(movedEntries + readBlock, std::memory_order_release);
-			break;
 		}
+		myRepairSlot.clear(std::memory_order_release);
+		myReadSlot.fetch_sub(movedEntries, std::memory_order_release);
+		myPreReadIterator.fetch_sub(movedEntries + readBlock, std::memory_order_release);
 	}
 #endif
 }
@@ -850,7 +845,7 @@ public:
 	inline void Store(const T& aIn);
 	inline void Store(T&& aIn);
 
-	inline void Swap(CqItemContainer<T>& aOther);
+	inline void Redirect(CqItemContainer<T>& aTo);
 
 	template<class U = T, std::enable_if_t<std::is_move_assignable<U>::value>* = nullptr>
 	inline void TryMove(U& aOut);
@@ -862,15 +857,17 @@ public:
 
 	inline const CqItemState GetState() const;
 	inline void SetState(const CqItemState aState);
+
+	inline void Reset();
 private:
-	inline T& Reference() const;
+	inline CqItemContainer<T>& Reference() const;
 	static const uint64_t ourPtrMask = (uint64_t(std::numeric_limits<uint32_t>::max()) << 16 | uint64_t(std::numeric_limits<uint16_t>::max()));
 
 	T myData;
 	union
 	{
-		T* myReference;
-		uint64_t myPtrBlock;
+		uint64_t myStateBlock;
+		CqItemContainer<T>* myReference;
 		struct
 		{
 			uint16_t trash[3];
@@ -880,65 +877,68 @@ private:
 };
 template<class T>
 inline CqItemContainer<T>::CqItemContainer()
-	: myPtrBlock(0)
-	, myData()
+	: myData()
+	, myReference(this)
 {
 }
 template<class T>
 inline void CqItemContainer<T>::Store(const T & aIn)
 {
 	myData = aIn;
-	myReference = &myData;
+	myReference = this;
 }
 template<class T>
 inline void CqItemContainer<T>::Store(T && aIn)
 {
 	myData = std::move(aIn);
-	myReference = &myData;
+	myReference = this;
 }
 template<class T>
-inline void CqItemContainer<T>::Swap(CqItemContainer<T>& aOther)
+inline void CqItemContainer<T>::Redirect(CqItemContainer<T>& aTo)
 {
-	T* const ref(aOther.myReference);
-	aOther.myReference = myReference;
-	myReference = ref;
+	myStateBlock = aTo.myStateBlock;
 }
 template<class T>
 inline void CqItemContainer<T>::Assign(T & aOut)
 {
-	aOut = Reference();
+	aOut = Reference().myData;
 }
 template<class T>
 inline void CqItemContainer<T>::Move(T & aOut)
 {
-	aOut = std::move(Reference());
+	aOut = std::move(Reference().myData);
 }
 template<class T>
 inline const CqItemState CqItemContainer<T>::GetState() const
 {
-	return myState;
+	return Reference().myState;
 }
 template<class T>
 inline void CqItemContainer<T>::SetState(const CqItemState aState)
 {
-	myState = aState;
+	Reference().myState = aState;
 }
 template<class T>
-inline T& CqItemContainer<T>::Reference() const
+inline void CqItemContainer<T>::Reset()
 {
-	return *reinterpret_cast<T*>(myPtrBlock & ourPtrMask);
+	myReference = this;
+}
+template<class T>
+inline CqItemContainer<T>& CqItemContainer<T>::Reference() const
+{
+	return *reinterpret_cast<CqItemContainer<T>*>(myStateBlock & ourPtrMask);
 }
 template<class T>
 template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
 inline void CqItemContainer<T>::TryMove(U& aOut)
 {
-	aOut = std::move(Reference());
+	aOut = std::move(Reference().myData);
 }
 template<class T>
 template<class U, std::enable_if_t<!std::is_move_assignable<U>::value>*>
 inline void CqItemContainer<T>::TryMove(U& aOut)
 {
-	aOut = Reference();
+	aOut = Reference().myData;
 }
 
 enum class CqItemState : int8_t
