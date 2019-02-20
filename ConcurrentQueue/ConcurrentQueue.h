@@ -898,8 +898,9 @@ inline void CqItemContainer<T>::Store(T && aIn)
 template<class T>
 inline void CqItemContainer<T>::Redirect(CqItemContainer<T>& aTo)
 {
-	myStateBlock |= ~ourPtrMask;
-	myStateBlock |= (aTo.myStateBlock & ourPtrMask);
+	const uint64_t otherPtrBlock(aTo.myStateBlock & ourPtrMask);
+	myStateBlock &= ~ourPtrMask;
+	myStateBlock |= otherPtrBlock;
 }
 template<class T>
 inline void CqItemContainer<T>::Assign(T & aOut)
