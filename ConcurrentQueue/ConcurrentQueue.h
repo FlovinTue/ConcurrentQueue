@@ -694,7 +694,7 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 
 	WriteOut(readSlot, aOut);
 
-	myDataBlock[readSlot].SetState(CqItemState::Empty);
+	myDataBlock[readSlot].Reset();
 
 	return true;
 }
@@ -802,15 +802,17 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 		for (size_type i = 0; (0 < myFailedItems.load(std::memory_order_relaxed)); ++i) {
 			const size_type currentIndex((lastSlot - i) % myCapacity);
 			CqItemContainer<T>& current(myDataBlock[currentIndex]);
+
 			if (current.GetState() == CqItemState::Valid) {
 				std::this_thread::yield();
 				--i;
 				continue;
 			};
-			const size_type targetIndex((lastSlot - movedEntries) % myCapacity);
-			CqItemContainer<T>& target(myDataBlock[targetIndex]);
 			if (current.GetState() == CqItemState::Failed) {
+				const size_type targetIndex((lastSlot - movedEntries) % myCapacity);
+				CqItemContainer<T>& target(myDataBlock[targetIndex]);
 				target.Redirect(current);
+				current.Redirect(current);
 				++movedEntries;
 				myFailedItems.fetch_sub(1, std::memory_order_relaxed);
 			}
@@ -896,7 +898,8 @@ inline void CqItemContainer<T>::Store(T && aIn)
 template<class T>
 inline void CqItemContainer<T>::Redirect(CqItemContainer<T>& aTo)
 {
-	myStateBlock = aTo.myStateBlock;
+	myStateBlock |= ~ourPtrMask;
+	myStateBlock |= (aTo.myStateBlock & ourPtrMask);
 }
 template<class T>
 inline void CqItemContainer<T>::Assign(T & aOut)

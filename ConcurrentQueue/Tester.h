@@ -6,8 +6,8 @@
 #include "Timer.h"
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 2;
-const uint32_t Readers = 4;
+const uint32_t Writers = 1;
+const uint32_t Readers = 1;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
