@@ -547,18 +547,22 @@ private:
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline void WriteOut(const size_type aSlot, U& aOut);
 
-	inline void TryReintegrateEntries();
+	inline const bool TryFetchFailedItem(T& aOut);
+	// Attempts to change the pre read iterator to an unreasonable state
+	// so that consumers will be detracted from entering the buffer
+	inline void TryBlockConsumers();
 
-	// Searches the buffer list towards the back for
-	// the last node
+	// Attempt to find failed items and redirect them to up-front positions
+	inline const bool TryReintegrateEntries();
+
+	// Searches the buffer list towards the back for the last node
 	inline CqBuffer<T>* const FindTail();
 
 	size_type myWriteSlot;
 	size_type myPostWriteIterator;
 
-	// The tail becomes the de-facto storage place for 
-	// unused buffers, until they are destroyed with the 
-	// entire structure
+	// The tail becomes the de-facto storage place for unused buffers,
+	// until they are destroyed with the entire structure
 	CqBuffer<T>* myTail;
 	CqBuffer<T>* myNext;
 
@@ -571,6 +575,7 @@ private:
 
 #ifdef CQ_ENABLE_EXCEPTIONS
 	std::atomic<size_type> myFailedItems;
+	std::atomic<size_type> myPreReadOffset;
 	std::atomic_flag myRepairSlot;
 #endif
 };
@@ -586,6 +591,7 @@ inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* cons
 	, myPostWriteIterator(0)
 #ifdef CQ_ENABLE_EXCEPTIONS
 	, myFailedItems(0)
+	, myPreReadOffset(0)
 #endif
 {
 #ifdef CQ_ENABLE_EXCEPTIONS
@@ -686,15 +692,17 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 
 	if (myCapacity < difference) {
 		--myPreReadIterator;
+#ifdef CQ_ENABLE_EXCEPTIONS
+		return TryFetchFailedItem(aOut);
+#else
 		return false;
+#endif
 	}
 
 	const size_type readSlotTotal(myReadSlot++);
 	const size_type readSlot(readSlotTotal % myCapacity);
 
 	WriteOut(readSlot, aOut);
-
-	myDataBlock[readSlot].Reset();
 
 	return true;
 }
@@ -755,7 +763,8 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 	}
 	catch (...) {
 		myDataBlock[aSlot].SetState(CqItemState::Failed);
-		TryReintegrateEntries();
+		myFailedItems.fetch_add(1, std::memory_order_release);
+		TryBlockConsumers();
 		throw;
 	}
 }
@@ -763,7 +772,7 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 // In the event an exception is thrown during a pop operation
 // this method is used to make the entries avaliable for popping
 // again. 
-// The first thread to claim the 'repairman slot' will begin by 
+// The first thread to claim the repair slot will begin by 
 // making the queue unenterable for external consumers, after which
 // it waits until all others have exited. It then proceeds to search
 // the buffer backwards, swapping the failed up front as it goes, 
@@ -771,11 +780,9 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 // of the iterators is restored, making the buffer once again attractive
 // to consumers
 template<class T>
-inline void CqBuffer<T>::TryReintegrateEntries()
+inline const bool CqBuffer<T>::TryReintegrateEntries()
 {
 #ifdef CQ_ENABLE_EXCEPTIONS
-	myFailedItems.fetch_add(1, std::memory_order_release);
-
 	const bool isClaimed(myRepairSlot.test_and_set());
 
 	if (!isClaimed) {
@@ -783,17 +790,11 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 		const size_type writeCapOffset(ConcurrentQueue<T>::BufferCapacityMax);
 		const size_type writeCapTopOff(ConcurrentQueue<T>::MaxProducers);
 		const size_type readBlock(writeCapOffset + writeCapTopOff);
-		const size_type preReadBlockState(myPreReadIterator.fetch_add(readBlock));
-
-		for (;;) {
-			const size_type preReadIterator(myPreReadIterator.load(std::memory_order_acquire) - readBlock);
-			if (preReadIterator == myReadSlot.load(std::memory_order_acquire)) {
-				break;
-			}
-			else
-				std::this_thread::yield();
+		const size_type preReadIterator(myPreReadIterator.load(std::memory_order_acquire) - readBlock);
+		if (preReadIterator != myReadSlot.load(std::memory_order_acquire)) {
+			return false;
 		}
-	
+
 		const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 
 		size_type movedEntries(0);
@@ -804,10 +805,8 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 			CqItemContainer<T>& current(myDataBlock[currentIndex]);
 
 			if (current.GetState() == CqItemState::Valid) {
-				std::this_thread::yield();
-				--i;
-				continue;
-			};
+				break;
+			}
 			if (current.GetState() == CqItemState::Failed) {
 				const size_type targetIndex((lastSlot - movedEntries) % myCapacity);
 				CqItemContainer<T>& target(myDataBlock[targetIndex]);
@@ -817,11 +816,50 @@ inline void CqBuffer<T>::TryReintegrateEntries()
 				myFailedItems.fetch_sub(1, std::memory_order_relaxed);
 			}
 		}
-		myRepairSlot.clear(std::memory_order_release);
 		myReadSlot.fetch_sub(movedEntries, std::memory_order_release);
-		myPreReadIterator.fetch_sub(movedEntries + readBlock, std::memory_order_release);
+		if (!(myFailedItems.load(std::memory_order_acquire))) {
+			myPreReadIterator.fetch_sub(movedEntries + readBlock, std::memory_order_release);
+		}
+		myRepairSlot.clear(std::memory_order_release);
+
+		return static_cast<bool>(movedEntries);
 	}
 #endif
+}
+template<class T>
+inline const bool CqBuffer<T>::TryFetchFailedItem(T & aOut)
+{
+	const bool empty(static_cast<bool>(myFailedItems._My_val));
+	if (empty) {
+		return false;
+	}
+	if (!TryReintegrateEntries()) {
+		return false;
+	}
+	const size_type readSlotTotal(myReadSlot++);
+	const size_type readSlot(readSlotTotal % myCapacity);
+
+	WriteOut(readSlot, aOut);
+
+	return true;
+}
+template<class T>
+inline void CqBuffer<T>::TryBlockConsumers()
+{
+	for (;;) {
+		const size_type writeCapOffset(ConcurrentQueue<T>::BufferCapacityMax);
+		const size_type writeCapTopOff(ConcurrentQueue<T>::MaxProducers);
+		const size_type readBlock(writeCapOffset + writeCapTopOff);
+
+		if (myPreReadOffset.load(std::memory_order_relaxed)) {
+			break;
+		}
+		size_type expected(0);
+		if (myPreReadOffset.compare_exchange_strong(expected, readBlock, std::memory_order_release)) {
+			myPreReadIterator.fetch_add(readBlock, std::memory_order_release);
+			break;
+		}
+	}
 }
 template<class T>
 inline CqBuffer<T>* const CqBuffer<T>::FindTail()
@@ -859,8 +897,6 @@ public:
 
 	inline const CqItemState GetState() const;
 	inline void SetState(const CqItemState aState);
-
-	inline void Reset();
 private:
 	inline CqItemContainer<T>& Reference() const;
 	static const uint64_t ourPtrMask = (uint64_t(std::numeric_limits<uint32_t>::max()) << 16 | uint64_t(std::numeric_limits<uint16_t>::max()));
@@ -921,11 +957,6 @@ template<class T>
 inline void CqItemContainer<T>::SetState(const CqItemState aState)
 {
 	Reference().myState = aState;
-}
-template<class T>
-inline void CqItemContainer<T>::Reset()
-{
-	myReference = this;
 }
 template<class T>
 inline CqItemContainer<T>& CqItemContainer<T>::Reference() const
