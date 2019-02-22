@@ -6,8 +6,8 @@
 #include "Timer.h"
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 8;
-const uint32_t Readers = 16;
+const uint32_t Writers = 1;
+const uint32_t Readers = 2;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -129,7 +129,6 @@ inline void Tester<T>::Read()
 				if (myQueue.TryPop(out)) {
 					++j;
 					sum += out.count;
-					//sum += out;
 				break;
 			}
 			}
