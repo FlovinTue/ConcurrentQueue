@@ -290,7 +290,13 @@ inline const bool ConcurrentQueue<T>::RelocateConsumer()
 		CqBuffer<T>* const buffer(myProducerSlots[entry]->FindBack());
 		if (buffer) {
 			ourConsumers[myObjectId] = buffer;
-			myProducerSlots[entry] = buffer;
+
+			if (myProducerSlots[entry] != buffer) {
+				if (buffer->VerifyPredecessorsInactive()) {
+					myProducerSlots[entry] = buffer;
+				}
+			}
+
 			return true;
 		}
 	}
@@ -522,7 +528,10 @@ public:
 
 	inline const size_t Size() const;
 
-	__declspec(noalias) inline size_type Capacity() const;
+	__declspec(noalias) inline const size_type Capacity() const;
+
+	inline const bool VerifyPredecessorsInactive();
+	inline void FlagAsInactive();
 
 	// Searches the buffer list towards the front for
 	// the first buffer containing entries
@@ -530,7 +539,10 @@ public:
 	// Pushes a newly allocated buffer buffer to the front of the 
 	// buffer list
 	inline void PushFront(CqBuffer<T>* const aNewBuffer);
+
+	CqBuffer<T>* const Previous() const;
 private:
+
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>* = nullptr>
 	inline void WriteIn(const size_type aSlot, U&& aIn);
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>* = nullptr>
@@ -563,7 +575,7 @@ private:
 
 	// The tail becomes the de-facto storage place for unused buffers,
 	// until they are destroyed with the entire structure
-	CqBuffer<T>* myTail;
+	CqBuffer<T>* myPrevious;
 	CqBuffer<T>* myNext;
 
 	const size_type myCapacity;
@@ -577,14 +589,12 @@ private:
 	std::atomic<size_type> myFailedItems;
 	std::atomic_flag myReadFailState;
 	std::atomic_flag myRepairSlot;
-	CQ_PADDING(64 - sizeof(std::atomic_flag) * 2 + sizeof(size_type));
-	std::atomic<size_type> myPostReadIterator;
 #endif
 };
 template<class T>
 inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* const aDataBlock)
 	: myNext(nullptr)
-	, myTail(nullptr)
+	, myPrevious(nullptr)
 	, myDataBlock(aDataBlock)
 	, myCapacity(aCapacity)
 	, myReadSlot(0)
@@ -593,7 +603,6 @@ inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* cons
 	, myPostWriteIterator(0)
 #ifdef CQ_ENABLE_EXCEPTIONS
 	, myFailedItems(0)
-	, myPostReadIterator(0)
 #endif
 {
 #ifdef CQ_ENABLE_EXCEPTIONS
@@ -631,13 +640,8 @@ inline CqBuffer<T>* const CqBuffer<T>::FindBack()
 	CqBuffer<T>* back(this);
 
 	while (back) {
-#ifdef CQ_ENABLE_EXCEPTIONS
-		if (back->myPostReadIterator.load(std::memory_order_relaxed) != back->myPostWriteIterator)
-			break;
-#else
 		if (back->myReadSlot.load(std::memory_order_relaxed) != back->myPostWriteIterator)
 			break;
-#endif
 
 		back = back->myNext;
 	}
@@ -658,9 +662,37 @@ inline const size_t CqBuffer<T>::Size() const
 }
 
 template<class T>
-__declspec(noalias) inline typename CqBuffer<T>::size_type CqBuffer<T>::Capacity() const
+__declspec(noalias) inline  const typename CqBuffer<T>::size_type CqBuffer<T>::Capacity() const
 {
 	return myCapacity;
+}
+
+template<class T>
+inline const bool CqBuffer<T>::VerifyPredecessorsInactive()
+{
+	CqBuffer<T>* previous(myPrevious);
+
+	while (previous) {
+		if (previous->myPostWriteIterator != (previous->myWriteSlot + 1)) {
+			const size_type preRead(previous->myPreReadIterator.load(std::memory_order_relaxed));
+			for (size_type i = 0; i < previous->myCapacity; ++i) {
+				const size_type index((preRead - i) % previous->myCapacity);
+
+				if (previous->myDataBlock[index].GetState() != CqItemState::Empty) {
+					return false;
+				}
+			}
+			previous->FlagAsInactive();
+		}
+		previous = previous->myPrevious;
+	}
+	return true;
+}
+
+template<class T>
+inline void CqBuffer<T>::FlagAsInactive()
+{
+	myPostWriteIterator = myWriteSlot + 1;
 }
 
 template<class T>
@@ -671,7 +703,12 @@ inline void CqBuffer<T>::PushFront(CqBuffer<T>* const aNewBuffer)
 		last = last->myNext;
 	}
 	last->myNext = aNewBuffer;
-	aNewBuffer->myTail = last;
+	aNewBuffer->myPrevious = last;
+}
+template<class T>
+inline CqBuffer<T>* const CqBuffer<T>::Previous() const
+{
+	return myPrevious;
 }
 template<class T>
 template<class ...Arg>
@@ -701,23 +738,18 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 
 	if (myCapacity < difference) {
 		--myPreReadIterator;
-		#ifdef CQ_ENABLE_EXCEPTIONS
-				return TryFetchFailedItem(aOut);
-		#else
+#ifdef CQ_ENABLE_EXCEPTIONS
+		return TryFetchFailedItem(aOut);
+#else
 		return false;
-		#endif
+#endif
 	}
-
 	const size_type readSlotTotal(myReadSlot++);
 	const size_type readSlot(readSlotTotal % myCapacity);
 
 	WriteOut(readSlot, aOut);
 
 	myDataBlock[readSlot].SetState(CqItemState::Empty);
-
-#ifdef CQ_ENABLE_EXCEPTIONS
-	myPostReadIterator.fetch_add(1, std::memory_order_relaxed);
-#endif
 
 	return true;
 }
@@ -875,8 +907,6 @@ inline const bool CqBuffer<T>::TryFetchFailedItem(T & aOut)
 
 	WriteOut(readSlot, aOut);
 
-	myPostReadIterator.fetch_add(1, std::memory_order_relaxed);
-
 #endif
 	return true;
 }
@@ -898,8 +928,8 @@ template<class T>
 inline CqBuffer<T>* const CqBuffer<T>::FindTail()
 {
 	CqBuffer<T>* tail(this);
-	while (tail->myTail) {
-		tail = tail->myTail;
+	while (tail->myPrevious) {
+		tail = tail->myPrevious;
 	}
 	return tail;
 }
