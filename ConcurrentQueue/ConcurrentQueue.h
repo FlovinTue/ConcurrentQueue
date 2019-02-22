@@ -577,6 +577,8 @@ private:
 	std::atomic<size_type> myFailedItems;
 	std::atomic_flag myReadFailState;
 	std::atomic_flag myRepairSlot;
+	CQ_PADDING(64 - sizeof(std::atomic_flag) * 2 + sizeof(size_type));
+	std::atomic<size_type> myPostReadIterator;
 #endif
 };
 template<class T>
@@ -591,6 +593,7 @@ inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* cons
 	, myPostWriteIterator(0)
 #ifdef CQ_ENABLE_EXCEPTIONS
 	, myFailedItems(0)
+	, myPostReadIterator(0)
 #endif
 {
 #ifdef CQ_ENABLE_EXCEPTIONS
@@ -628,8 +631,13 @@ inline CqBuffer<T>* const CqBuffer<T>::FindBack()
 	CqBuffer<T>* back(this);
 
 	while (back) {
+#ifdef CQ_ENABLE_EXCEPTIONS
+		if (back->myPostReadIterator.load(std::memory_order_relaxed) != back->myPostWriteIterator)
+			break;
+#else
 		if (back->myReadSlot.load(std::memory_order_relaxed) != back->myPostWriteIterator)
 			break;
+#endif
 
 		back = back->myNext;
 	}
@@ -640,7 +648,8 @@ template<class T>
 inline const size_t CqBuffer<T>::Size() const
 {
 	size_t size(myPostWriteIterator);
-	size -= myPreReadIterator.load(std::memory_order_relaxed);
+	const size_t readSlot(myReadSlot.load(std::memory_order_relaxed));
+	size -= readSlot;
 
 	if (myNext)
 		size += myNext->Size();
@@ -692,11 +701,11 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 
 	if (myCapacity < difference) {
 		--myPreReadIterator;
-#ifdef CQ_ENABLE_EXCEPTIONS
-		return TryFetchFailedItem(aOut);
-#else
+		#ifdef CQ_ENABLE_EXCEPTIONS
+				return TryFetchFailedItem(aOut);
+		#else
 		return false;
-#endif
+		#endif
 	}
 
 	const size_type readSlotTotal(myReadSlot++);
@@ -705,6 +714,10 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 	WriteOut(readSlot, aOut);
 
 	myDataBlock[readSlot].SetState(CqItemState::Empty);
+
+#ifdef CQ_ENABLE_EXCEPTIONS
+	myPostReadIterator.fetch_add(1, std::memory_order_relaxed);
+#endif
 
 	return true;
 }
@@ -767,9 +780,10 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 #ifdef CQ_ENABLE_EXCEPTIONS
 	}
 	catch (...) {
+		myDataBlock[aSlot].SetState(CqItemState::Failed);
 		myFailedItems.fetch_add(1, std::memory_order_release);
 		TryBlockConsumers();
-		myDataBlock[aSlot].SetState(CqItemState::Failed);
+		TryReintegrateEntries();
 		throw;
 	}
 #endif
@@ -860,6 +874,8 @@ inline const bool CqBuffer<T>::TryFetchFailedItem(T & aOut)
 	const size_type readSlot(readSlotTotal % myCapacity);
 
 	WriteOut(readSlot, aOut);
+
+	myPostReadIterator.fetch_add(1, std::memory_order_relaxed);
 
 #endif
 	return true;

@@ -6,8 +6,8 @@
 #include "Timer.h"
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 1;
-const uint32_t Readers = 2;
+const uint32_t Writers = 2;
+const uint32_t Readers = 4;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -94,8 +94,7 @@ inline void Tester<T>::Write()
 	uint32_t sum(0);
 
 	for (int j = 0; j < WritesPerThread; ) {
-		 T in;
-		 in.count = rand();
+		const T in(1);
 		try {
 			myQueue.Push(in);
 			++j;
@@ -104,14 +103,13 @@ inline void Tester<T>::Write()
 		catch (...) {
 		}
 	}
-	 myWrittenSum += sum;
 
 	//for (int j = 0; j < WritesPerThread; ++j) {
 	//	const T in(1);
 	//	myQueue.Push(in);
 	//	sum += in;
 	//}
-	//myWrittenSum += sum;
+	myWrittenSum += sum;
 }
 
 template<class T>
@@ -137,7 +135,6 @@ inline void Tester<T>::Read()
 
 		}
 	}
-	myReadSum += sum;
 
 	//for (int j = 0; j < ReadsPerThread; ++j) {
 	//	while (true) {
@@ -147,6 +144,6 @@ inline void Tester<T>::Read()
 	//		}
 	//	}
 	//}
-	//myReadSum += sum;
+	myReadSum += sum;
 }
 
