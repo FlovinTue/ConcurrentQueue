@@ -3,13 +3,13 @@
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
 <Type Name="ConcurrentQueue&lt;*&gt;">
-    <DisplayString>{{ CurrentSize={myProducerCount} }}</DisplayString>
+    <DisplayString>{{ CurrentSize={myProducerCount._My_val} }}</DisplayString>
     <Expand>
-        <Item Name="[CurrentSize]">myProducerCount</Item>
-        <Item Name="[MaxSize]">myProducerCapacity</Item>
+        <Item Name="[CurrentSize]">myProducerCount._My_val</Item>
+        <Item Name="[MaxSize]">myProducerCapacity._My_val</Item>
         <ArrayItems>
-            <Size>myProducerCount</Size>
-            <ValuePointer>myProducerSlots</ValuePointer>
+            <Size>myProducerCount._My_val</Size>
+            <ValuePointer>myProducerSlots._My_val</ValuePointer>
         </ArrayItems>
     </Expand>
 </Type>

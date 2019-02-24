@@ -94,7 +94,7 @@ inline void Tester<T>::Write()
 	uint32_t sum(0);
 
 	//for (int j = 0; j < WritesPerThread; ) {
-	//	const T in(1);
+	//	const T in(rand());
 	//	try {
 	//		myQueue.Push(in);
 	//		++j;
