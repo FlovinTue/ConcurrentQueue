@@ -35,7 +35,7 @@
 // Reintegration of entries that throws an exception during pop is 
 // currently non functioning
 #define CQ_ENABLE_EXCEPTIONHANDLING 
-#undef CQ_ENABLE_EXCEPTIONHANDLING
+//#undef CQ_ENABLE_EXCEPTIONHANDLING
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -580,6 +580,7 @@ private:
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	std::atomic_flag myFailiureFlag;
+	std::atomic<size_type> myFailiureIndex;
 #endif
 };
 template<class T>
@@ -592,9 +593,12 @@ inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* cons
 	, myPreReadIterator(0)
 	, myWriteSlot(0)
 	, myPostWriteIterator(0)
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	, myFailiureIndex(0)
+#endif
 {
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	myFailiureFlag.clear();
+myFailiureFlag.clear();
 #endif
 }
 
@@ -793,10 +797,10 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
-		if (!myFailiureFlag.test_and_set()) {
-			myPreReadIterator.fetch_add(BufferLockOffset, std::memory_order_release);
-		}
 		myDataBlock[aSlot].SetState(CqItemState::Failed);
+		if (!myFailiureFlag.test_and_set()){
+			myFailiureIndex.store(myPreReadIterator.fetch_add(BufferLockOffset));
+		}
 		throw;
 	}
 #endif
