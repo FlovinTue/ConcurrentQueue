@@ -295,11 +295,11 @@ inline const bool ConcurrentQueue<T>::RelocateConsumer()
 			ourConsumers[myObjectId] = buffer;
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-			if (myProducerSlots[entry] != buffer) 
-				if (buffer->VerifyAsReplacement()) 
+			if (myProducerSlots[entry] != buffer)
+				if (buffer->VerifyAsReplacement())
 #endif				myProducerSlots[entry] = buffer;
 
-			return true;
+					return true;
 		}
 	}
 	return false;
@@ -558,6 +558,8 @@ private:
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline void WriteOut(const size_type aSlot, U& aOut);
 
+	inline const size_type CountWithState(const CqItemState aItemState);
+
 	// Searches the buffer list towards the back for the last node
 	inline CqBuffer<T>* const FindTail();
 
@@ -579,8 +581,8 @@ private:
 	std::atomic<size_type> myPreReadIterator;
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	std::atomic_flag myFailiureFlag;
-	std::atomic<size_type> myFailiureIndex;
+	std::atomic<uint16_t> myFailiureCount;
+	std::atomic<uint16_t> myFailiureIndex;
 #endif
 };
 template<class T>
@@ -595,11 +597,9 @@ inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* cons
 	, myPostWriteIterator(0)
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	, myFailiureIndex(0)
+	, myFailiureCount(0)
 #endif
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-myFailiureFlag.clear();
-#endif
 }
 
 template<class T>
@@ -798,12 +798,39 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 	}
 	catch (...) {
 		myDataBlock[aSlot].SetState(CqItemState::Failed);
-		if (!myFailiureFlag.test_and_set()){
-			myFailiureIndex.store(myPreReadIterator.fetch_add(BufferLockOffset));
+		if (myFailiureCount.fetch_add(1) == myFailiureIndex) {
+			myPreReadIterator.fetch_add(BufferLockOffset, std::memory_order_release);
 		}
 		throw;
 	}
 #endif
+}
+template<class T>
+inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const CqItemState aItemState)
+{
+	const size_type startIndexTotal(myReadSlot.load(std::memory_order_acquire) - 1);
+	const size_type startIndex(startIndexTotal % myCapacity);
+	const size_type endIndexTotal(myWriteSlot - 1);
+	const size_type endIndex(endIndexTotal % myCapacity);
+	const size_type maxIterations((startIndexTotal + myCapacity) - endIndexTotal);
+	size_type count(0);
+	for (size_type i = 0; i < maxIterations; ++i) {
+		const size_type currentIndexTotal(startIndex - i);
+		const size_type currentIndex(currentIndexTotal % myCapacity);
+
+		const CqItemState currentState(myDataBlock[currentIndex].GetStateLocal());
+
+		const size_type currentWrite(myWriteSlot - 1);
+		const size_type difference(currentIndexTotal - currentWrite);
+		if (!(difference < myCapacity)) {
+			break;
+		}
+
+		if (currentState == aItemState) {
+			++count;
+		}
+	}
+	return count;
 }
 template<class T>
 inline CqBuffer<T>* const CqBuffer<T>::FindTail()
