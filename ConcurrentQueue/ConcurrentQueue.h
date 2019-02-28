@@ -636,7 +636,7 @@ inline CqBuffer<T>* const CqBuffer<T>::FindBack()
 
 		const bool match(readSlot == postWrite);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-		const bool veto(myFailiureFlag._My_flag);
+		const bool veto(myFailiureCount.load(std::memory_order_relaxed) != myFailiureIndex.load(std::memory_order_relaxed));
 		const bool valid(!match | veto);
 #else
 		const bool valid(!match);
@@ -797,10 +797,10 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
-		myDataBlock[aSlot].SetState(CqItemState::Failed);
-		if (myFailiureCount.fetch_add(1) == myFailiureIndex) {
+		if (myFailiureCount.fetch_add(1) == myFailiureIndex.load(std::memory_order_acquire)) {
 			myPreReadIterator.fetch_add(BufferLockOffset, std::memory_order_release);
 		}
+		myDataBlock[aSlot].SetState(CqItemState::Failed);
 		throw;
 	}
 #endif
@@ -808,21 +808,28 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 template<class T>
 inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const CqItemState aItemState)
 {
-	const size_type startIndexTotal(myReadSlot.load(std::memory_order_acquire) - 1);
+	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
+	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
+
+	const size_type startIndexTotal(readSlotTotalOffset - 1);
 	const size_type startIndex(startIndexTotal % myCapacity);
+
+	const size_type writeSlotTotal(myWriteSlot);
+
 	const size_type endIndexTotal(myWriteSlot - 1);
 	const size_type endIndex(endIndexTotal % myCapacity);
-	const size_type maxIterations((startIndexTotal + myCapacity) - endIndexTotal);
+	const size_type maxIterations(readSlotTotalOffset - writeSlotTotal);
+
 	size_type count(0);
 	for (size_type i = 0; i < maxIterations; ++i) {
-		const size_type currentIndexTotal(startIndex - i);
+		const size_type currentIndexTotal(startIndexTotal - i);
 		const size_type currentIndex(currentIndexTotal % myCapacity);
 
 		const CqItemState currentState(myDataBlock[currentIndex].GetStateLocal());
 
-		const size_type currentWrite(myWriteSlot - 1);
-		const size_type difference(currentIndexTotal - currentWrite);
-		if (!(difference < myCapacity)) {
+		const size_type writeSlotTotalCurrent(myWriteSlot);
+
+		if (!(writeSlotTotalCurrent < readSlotTotalOffset)) {
 			break;
 		}
 
