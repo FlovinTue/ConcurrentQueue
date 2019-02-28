@@ -535,6 +535,8 @@ public:
 	// Makes sure that predecessors are wholly unused
 	inline const bool VerifyAsReplacement();
 
+	inline void CheckRepairs();
+
 	// Searches the buffer list towards the front for
 	// the first buffer containing entries
 	inline CqBuffer<T>* const FindBack();
@@ -685,6 +687,29 @@ inline const bool CqBuffer<T>::VerifyAsReplacement()
 		previous = previous->myPrevious;
 	}
 	return true;
+}
+template<class T>
+inline void CqBuffer<T>::CheckRepairs()
+{
+	const size_type failiureCount(myFailiureCount.load(std::memory_order_acquire));
+	const size_type failiureIndex(myFailiureIndex.load(std::memory_order_acquire));
+
+	if (failiureCount == failiureIndex) {
+		return;
+	}
+
+	const size_type validCount(CountWithState(CqItemState::Valid));
+
+	if (validCount) {
+		return;
+	}
+
+	size_type expected(failiureIndex);
+	const size_type desired(failiureCount); 
+
+	if (myFailiureIndex.compare_exchange_strong(expected, desired)) {
+		ReintegrateFailedEntries();
+	}
 }
 template<class T>
 inline void CqBuffer<T>::PushFront(CqBuffer<T>* const aNewBuffer)
