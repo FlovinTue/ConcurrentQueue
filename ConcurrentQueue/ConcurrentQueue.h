@@ -562,6 +562,8 @@ private:
 
 	inline const size_type CountWithState(const CqItemState aItemState);
 
+	inline void ReintegrateFailedEntries();
+
 	// Searches the buffer list towards the back for the last node
 	inline CqBuffer<T>* const FindTail();
 
@@ -691,8 +693,8 @@ inline const bool CqBuffer<T>::VerifyAsReplacement()
 template<class T>
 inline void CqBuffer<T>::CheckRepairs()
 {
-	const size_type failiureCount(myFailiureCount.load(std::memory_order_acquire));
-	const size_type failiureIndex(myFailiureIndex.load(std::memory_order_acquire));
+	const uint16_t failiureCount(myFailiureCount.load(std::memory_order_acquire));
+	const uint16_t failiureIndex(myFailiureIndex.load(std::memory_order_acquire));
 
 	if (failiureCount == failiureIndex) {
 		return;
@@ -833,6 +835,8 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 template<class T>
 inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const CqItemState aItemState)
 {
+	// HMM..
+
 	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
 
@@ -863,6 +867,34 @@ inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const C
 		}
 	}
 	return count;
+}
+template<class T>
+inline void CqBuffer<T>::ReintegrateFailedEntries()
+{
+	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
+	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
+
+	const size_type startIndex(readSlotTotalOffset - 1);
+	const size_type endIndex(myPostWriteIterator);
+
+	size_type numRedirected(0);
+	for (size_type i = 0, j = startIndex; j != endIndex; ++i, --j) {
+		const size_type currentIndex((startIndex - i) % myCapacity);
+		CqItemContainer<T>& currentItem(myDataBlock[currentIndex]);
+		const CqItemState currentState(currentItem.GetState());
+
+		if (currentState == CqItemState::Failed) {
+			const size_type redirectIndex(startIndex - numRedirected);
+			CqItemContainer<T>& toRedirect(myDataBlock[redirectIndex]);
+
+			toRedirect.Redirect(currentItem);
+			currentItem.Redirect(currentItem);
+
+			toRedirect.SetState(CqItemState::Valid);
+
+			++numRedirected;
+		}
+	}
 }
 template<class T>
 inline CqBuffer<T>* const CqBuffer<T>::FindTail()
