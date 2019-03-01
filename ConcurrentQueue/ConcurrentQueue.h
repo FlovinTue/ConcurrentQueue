@@ -587,6 +587,7 @@ private:
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	std::atomic<uint16_t> myFailiureCount;
 	std::atomic<uint16_t> myFailiureIndex;
+	bool myValidFlag;
 #endif
 };
 template<class T>
@@ -602,6 +603,7 @@ inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* cons
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	, myFailiureIndex(0)
 	, myFailiureCount(0)
+	, myValidFlag(true)
 #endif
 {
 }
@@ -678,14 +680,17 @@ inline const bool CqBuffer<T>::VerifyAsReplacement()
 {
 	CqBuffer<T>* previous(myPrevious);
 	while (previous) {
-		const size_type preRead(previous->myPreReadIterator.load(std::memory_order_relaxed));
-		for (size_type i = 0; i < previous->myCapacity; ++i) {
-			const size_type index((preRead - i) % previous->myCapacity);
+		if (previous->myValidFlag) {
+			const size_type preRead(previous->myPreReadIterator.load(std::memory_order_relaxed));
+			for (size_type i = 0; i < previous->myCapacity; ++i) {
+				const size_type index((preRead - i) % previous->myCapacity);
 
-			if (previous->myDataBlock[index].GetState() != CqItemState::Empty) {
-				return false;
+				if (previous->myDataBlock[index].GetState() != CqItemState::Empty) {
+					return false;
+				}
 			}
 		}
+		previous->myValidFlag = false;
 		previous = previous->myPrevious;
 	}
 	return true;
@@ -708,7 +713,7 @@ inline void CqBuffer<T>::CheckRepairs()
 	}
 
 	size_type expected(failiureIndex);
-	const size_type desired(failiureCount); 
+	const size_type desired(failiureCount);
 
 	if (myFailiureIndex.compare_exchange_strong(expected, desired)) {
 		ReintegrateFailedEntries();
