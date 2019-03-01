@@ -693,6 +693,7 @@ inline const bool CqBuffer<T>::VerifyAsReplacement()
 template<class T>
 inline void CqBuffer<T>::CheckRepairs()
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	const uint16_t failiureCount(myFailiureCount.load(std::memory_order_acquire));
 	const uint16_t failiureIndex(myFailiureIndex.load(std::memory_order_acquire));
 
@@ -712,6 +713,7 @@ inline void CqBuffer<T>::CheckRepairs()
 	if (myFailiureIndex.compare_exchange_strong(expected, desired)) {
 		ReintegrateFailedEntries();
 	}
+#endif
 }
 template<class T>
 inline void CqBuffer<T>::PushFront(CqBuffer<T>* const aNewBuffer)
@@ -934,6 +936,8 @@ public:
 	inline const CqItemState GetStateLocal() const;
 	inline void SetState(const CqItemState aState);
 	inline void SetStateLocal(const CqItemState aState);
+
+	inline const uint8_t Iteration() const;
 private:
 	// May or may not reference this container
 	inline CqItemContainer<T>& Reference() const;
@@ -950,6 +954,7 @@ private:
 		{
 			uint16_t trash[3];
 			CqItemState myState;
+			uint8_t myIteration;
 		};
 	};
 };
@@ -963,13 +968,27 @@ template<class T>
 inline void CqItemContainer<T>::Store(const T & aIn)
 {
 	myData = aIn;
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	const uint8_t iteration(myIteration);
+#endif
 	myReference = this;
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	myIteration = iteration;
+	++myIteration;
+#endif
 }
 template<class T>
 inline void CqItemContainer<T>::Store(T && aIn)
 {
 	myData = std::move(aIn);
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	const uint8_t iteration(myIteration);
+#endif
 	myReference = this;
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	myIteration = iteration;
+	++myIteration;
+#endif
 }
 template<class T>
 inline void CqItemContainer<T>::Redirect(CqItemContainer<T>& aTo)
@@ -1002,6 +1021,11 @@ template<class T>
 inline void CqItemContainer<T>::SetStateLocal(const CqItemState aState)
 {
 	myState = aState;
+}
+template<class T>
+inline const uint8_t CqItemContainer<T>::Iteration() const
+{
+	return myIteration;
 }
 template<class T>
 inline const CqItemState CqItemContainer<T>::GetStateLocal() const
