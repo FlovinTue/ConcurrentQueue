@@ -562,7 +562,7 @@ private:
 
 	inline const size_type CountWithState(const CqItemState aItemState);
 
-	inline void ReintegrateFailedEntries();
+	inline const size_type ReintegrateFailedEntries();
 
 	// Searches the buffer list towards the back for the last node
 	inline CqBuffer<T>* const FindTail();
@@ -642,7 +642,7 @@ inline CqBuffer<T>* const CqBuffer<T>::FindBack()
 
 		const bool match(readSlot == postWrite);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-		const bool veto(myFailiureCount.load(std::memory_order_relaxed) != myFailiureIndex.load(std::memory_order_relaxed));
+		const bool veto(back->myFailiureCount.load(std::memory_order_relaxed) != back->myFailiureIndex.load(std::memory_order_relaxed));
 		const bool valid(!match | veto);
 #else
 		const bool valid(!match);
@@ -712,11 +712,14 @@ inline void CqBuffer<T>::CheckRepairs()
 		return;
 	}
 
-	size_type expected(failiureIndex);
-	const size_type desired(failiureCount);
+	uint16_t expected(failiureIndex);
+	const uint16_t desired(failiureCount);
 
 	if (myFailiureIndex.compare_exchange_strong(expected, desired)) {
-		ReintegrateFailedEntries();
+		const size_type reintegrated(ReintegrateFailedEntries());
+
+		myReadSlot.fetch_sub(reintegrated);
+		myPreReadIterator.fetch_sub(BufferLockOffset + reintegrated, std::memory_order_release);
 	}
 #endif
 }
@@ -760,6 +763,9 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 	const size_type avaliable(lastWritten - slotReserved);
 
 	if (myCapacity < avaliable) {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+		CheckRepairs();
+#endif
 		--myPreReadIterator;
 		return false;
 	}
@@ -842,19 +848,21 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 template<class T>
 inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const CqItemState aItemState)
 {
-	// HMM..
-
 	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
 
 	const size_type startIndexTotal(readSlotTotalOffset - 1);
 	const size_type startIndex(startIndexTotal % myCapacity);
 
-	const size_type writeSlotTotal(myWriteSlot);
+	const size_type postWriteTotal(myPostWriteIterator);
 
-	const size_type endIndexTotal(myWriteSlot - 1);
+	const size_type endIndexTotal(postWriteTotal - 1);
 	const size_type endIndex(endIndexTotal % myCapacity);
-	const size_type maxIterations(readSlotTotalOffset - writeSlotTotal);
+
+	const size_type maxIterations(readSlotTotalOffset - postWriteTotal);
+
+	const uint8_t startIteration(myDataBlock[startIndex].Iteration());
+	const uint8_t nextIteration(startIteration + 1);
 
 	size_type count(0);
 	for (size_type i = 0; i < maxIterations; ++i) {
@@ -862,10 +870,9 @@ inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const C
 		const size_type currentIndex(currentIndexTotal % myCapacity);
 
 		const CqItemState currentState(myDataBlock[currentIndex].GetStateLocal());
+		const uint8_t currentIteration(myDataBlock[currentIndex].Iteration());
 
-		const size_type writeSlotTotalCurrent(myWriteSlot);
-
-		if (!(writeSlotTotalCurrent < readSlotTotalOffset)) {
+		if (currentIteration == nextIteration) {
 			break;
 		}
 
@@ -876,32 +883,33 @@ inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const C
 	return count;
 }
 template<class T>
-inline void CqBuffer<T>::ReintegrateFailedEntries()
+inline const typename CqBuffer<T>::size_type CqBuffer<T>::ReintegrateFailedEntries()
 {
+	const size_type maxRedirects(CountWithState(CqItemState::Failed));
+
 	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
 
 	const size_type startIndex(readSlotTotalOffset - 1);
-	const size_type endIndex(myPostWriteIterator);
+	const size_type endIndex(myPostWriteIterator - 1);
 
 	size_type numRedirected(0);
-	for (size_type i = 0, j = startIndex; j != endIndex; ++i, --j) {
+	for (size_type i = 0, j = startIndex; j != endIndex && numRedirected != maxRedirects; ++i, --j) {
 		const size_type currentIndex((startIndex - i) % myCapacity);
 		CqItemContainer<T>& currentItem(myDataBlock[currentIndex]);
 		const CqItemState currentState(currentItem.GetState());
+		currentItem.Redirect(currentItem);
 
 		if (currentState == CqItemState::Failed) {
-			const size_type redirectIndex(startIndex - numRedirected);
-			CqItemContainer<T>& toRedirect(myDataBlock[redirectIndex]);
-
+			const size_type toRedirectIndex((startIndex - numRedirected) % myCapacity);
+			CqItemContainer<T>& toRedirect(myDataBlock[toRedirectIndex]);
 			toRedirect.Redirect(currentItem);
-			currentItem.Redirect(currentItem);
-
 			toRedirect.SetState(CqItemState::Valid);
 
 			++numRedirected;
 		}
 	}
+	return numRedirected;
 }
 template<class T>
 inline CqBuffer<T>* const CqBuffer<T>::FindTail()
@@ -979,7 +987,7 @@ inline void CqItemContainer<T>::Store(const T & aIn)
 	myReference = this;
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myIteration = iteration;
-	++myIteration;
+	myIteration += 1;
 #endif
 }
 template<class T>
