@@ -1,3 +1,3 @@
 # ConcurrentQueue
 
-Blazing fast thread-safe lock free queue with exception handling
+Thread-safe lock free queue with exception handling
