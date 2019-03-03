@@ -23,19 +23,9 @@
 #include <atomic>
 #include <vector>
 
-// For testing ---
-#include <random>
-#include <mutex>
-#include <iostream>
-
-#define TEST_SLEEP {std::random_device rd; std::mt19937 rng(rd()); if (rng() % 10 == 1) std::this_thread::sleep_for(std::chrono::microseconds(1));}
-#define TEST_THROW {std::random_device rd; std::mt19937 rng(rd()); if (rng() % 10 == 1) throw std::runtime_error("Test");}
-// ---------------
-
-// Reintegration of entries that throws an exception during pop is 
-// currently non functioning
-#define CQ_ENABLE_EXCEPTIONHANDLING 
-//#undef CQ_ENABLE_EXCEPTIONHANDLING
+// Undefine for a slight performance increase in some
+// situations
+//#define CQ_ENABLE_EXCEPTIONHANDLING 
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -294,12 +284,12 @@ inline const bool ConcurrentQueue<T>::RelocateConsumer()
 		if (buffer) {
 			ourConsumers[myObjectId] = buffer;
 
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-			if (myProducerSlots[entry] != buffer)
-				if (buffer->VerifyAsReplacement())
-#endif				myProducerSlots[entry] = buffer;
-
-					return true;
+			if (myProducerSlots[entry] != buffer) {
+				if (buffer->VerifyAsReplacement()) {			
+					myProducerSlots[entry] = buffer;
+				}
+			}
+			return true;
 		}
 	}
 	return false;
@@ -533,9 +523,10 @@ public:
 	__declspec(noalias) inline const size_type Capacity() const;
 
 	// Makes sure that predecessors are wholly unused
+	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline const bool VerifyAsReplacement();
-
-	inline void CheckRepairs();
+	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
+	inline const bool VerifyAsReplacement();
 
 	// Searches the buffer list towards the front for
 	// the first buffer containing entries
@@ -560,9 +551,17 @@ private:
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline void WriteOut(const size_type aSlot, U& aOut);
 
-	inline const size_type CountWithState(const CqItemState aItemState);
+	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
+	inline void PostPopCleanup(const size_type aReadSlot);
+	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
+	inline void PostPopCleanup(const size_type aReadSlot);
 
-	inline const size_type ReintegrateFailedEntries();
+	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
+	inline void CheckRepairs();
+	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
+	inline void CheckRepairs();
+
+	inline void ReintegrateFailedEntries(const size_type aFailCount);
 
 	// Searches the buffer list towards the back for the last node
 	inline CqBuffer<T>* const FindTail();
@@ -588,6 +587,8 @@ private:
 	std::atomic<uint16_t> myFailiureCount;
 	std::atomic<uint16_t> myFailiureIndex;
 	bool myValidFlag;
+	CQ_PADDING(64 - 5);
+	std::atomic<size_type> myPostReadIterator;
 #endif
 };
 template<class T>
@@ -603,6 +604,7 @@ inline CqBuffer<T>::CqBuffer(const size_type aCapacity, CqItemContainer<T>* cons
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	, myFailiureIndex(0)
 	, myFailiureCount(0)
+	, myPostReadIterator(0)
 	, myValidFlag(true)
 #endif
 {
@@ -674,8 +676,14 @@ __declspec(noalias) inline  const typename CqBuffer<T>::size_type CqBuffer<T>::C
 {
 	return myCapacity;
 }
-
 template<class T>
+template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
+inline const bool CqBuffer<T>::VerifyAsReplacement()
+{
+	return true;
+}
+template<class T>
+template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline const bool CqBuffer<T>::VerifyAsReplacement()
 {
 	CqBuffer<T>* previous(myPrevious);
@@ -685,7 +693,7 @@ inline const bool CqBuffer<T>::VerifyAsReplacement()
 			for (size_type i = 0; i < previous->myCapacity; ++i) {
 				const size_type index((preRead - i) % previous->myCapacity);
 
-				if (previous->myDataBlock[index].GetState() != CqItemState::Empty) {
+				if (previous->myDataBlock[index].GetStateLocal() != CqItemState::Empty) {
 					return false;
 				}
 			}
@@ -696,30 +704,41 @@ inline const bool CqBuffer<T>::VerifyAsReplacement()
 	return true;
 }
 template<class T>
+template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
+inline void CqBuffer<T>::CheckRepairs()
+{
+}
+template<class T>
+template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void CqBuffer<T>::CheckRepairs()
 {
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	const uint16_t failiureCount(myFailiureCount.load(std::memory_order_acquire));
+	const size_type preRead(myPreReadIterator.load(std::memory_order_acquire));
+	const size_type preReadLockOffset(preRead - BufferLockOffset);
+	if (preReadLockOffset != myPostReadIterator.load(std::memory_order_acquire)) {
+		return;
+	}
+
 	const uint16_t failiureIndex(myFailiureIndex.load(std::memory_order_acquire));
+	const uint16_t failiureCount(myFailiureCount.load(std::memory_order_acquire));
+	const uint16_t difference(failiureCount - failiureIndex);
 
-	if (failiureCount == failiureIndex) {
+	const bool failCheckA(0 == difference);
+	const bool failCheckB(!(difference < ConcurrentQueue<T>::MaxProducers));
+	if (failCheckA | failCheckB) {
 		return;
 	}
 
-	const size_type validCount(CountWithState(CqItemState::Valid));
-
-	if (validCount) {
-		return;
-	}
+	const size_type toReintegrate(failiureCount - failiureIndex);
 
 	uint16_t expected(failiureIndex);
 	const uint16_t desired(failiureCount);
-
 	if (myFailiureIndex.compare_exchange_strong(expected, desired)) {
-		const size_type reintegrated(ReintegrateFailedEntries());
+		ReintegrateFailedEntries(toReintegrate);
 
-		myReadSlot.fetch_sub(reintegrated);
-		myPreReadIterator.fetch_sub(BufferLockOffset + reintegrated, std::memory_order_release);
+		myPostReadIterator.fetch_sub(toReintegrate, std::memory_order_release);
+		myReadSlot.fetch_sub(toReintegrate, std::memory_order_release);
+		myPreReadIterator.fetch_sub(BufferLockOffset + toReintegrate, std::memory_order_release);
 	}
 #endif
 }
@@ -763,10 +782,10 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 	const size_type avaliable(lastWritten - slotReserved);
 
 	if (myCapacity < avaliable) {
+		--myPreReadIterator;
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 		CheckRepairs();
 #endif
-		--myPreReadIterator;
 		return false;
 	}
 	const size_type readSlotTotal(myReadSlot++);
@@ -774,7 +793,7 @@ inline const bool CqBuffer<T>::TryPop(T & aOut)
 
 	WriteOut(readSlot, aOut);
 
-	myDataBlock[readSlot].SetState(CqItemState::Empty);
+	PostPopCleanup(readSlot);
 
 	return true;
 }
@@ -820,6 +839,23 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 {
 	myDataBlock[aSlot].Move(aOut);
 }
+template<class T>
+template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
+inline void CqBuffer<T>::PostPopCleanup(const size_type aReadSlot)
+{
+	myDataBlock[aReadSlot].SetState(CqItemState::Empty);
+}
+template<class T>
+template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
+inline void CqBuffer<T>::PostPopCleanup(const size_type aReadSlot)
+{
+	myDataBlock[aReadSlot].SetState(CqItemState::Empty);
+
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	myDataBlock[aReadSlot].ResetState();
+	myPostReadIterator.fetch_add(1, std::memory_order_release);
+#endif
+}
 template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
@@ -841,75 +877,34 @@ inline void CqBuffer<T>::WriteOut(const size_type aSlot, U& aOut)
 			myPreReadIterator.fetch_add(BufferLockOffset, std::memory_order_release);
 		}
 		myDataBlock[aSlot].SetState(CqItemState::Failed);
+		myPostReadIterator.fetch_add(1, std::memory_order_release);
 		throw;
 	}
 #endif
 }
 template<class T>
-inline const typename CqBuffer<T>::size_type CqBuffer<T>::CountWithState(const CqItemState aItemState)
+inline void CqBuffer<T>::ReintegrateFailedEntries(const size_type aFailCount)
 {
-	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
-	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
-
-	const size_type startIndexTotal(readSlotTotalOffset - 1);
-	const size_type startIndex(startIndexTotal % myCapacity);
-
-	const size_type postWriteTotal(myPostWriteIterator);
-
-	const size_type endIndexTotal(postWriteTotal - 1);
-	const size_type endIndex(endIndexTotal % myCapacity);
-
-	const size_type maxIterations(readSlotTotalOffset - postWriteTotal);
-
-	const uint8_t startIteration(myDataBlock[startIndex].Iteration());
-	const uint8_t nextIteration(startIteration + 1);
-
-	size_type count(0);
-	for (size_type i = 0; i < maxIterations; ++i) {
-		const size_type currentIndexTotal(startIndexTotal - i);
-		const size_type currentIndex(currentIndexTotal % myCapacity);
-
-		const CqItemState currentState(myDataBlock[currentIndex].GetStateLocal());
-		const uint8_t currentIteration(myDataBlock[currentIndex].Iteration());
-
-		if (currentIteration == nextIteration) {
-			break;
-		}
-
-		if (currentState == aItemState) {
-			++count;
-		}
-	}
-	return count;
-}
-template<class T>
-inline const typename CqBuffer<T>::size_type CqBuffer<T>::ReintegrateFailedEntries()
-{
-	const size_type maxRedirects(CountWithState(CqItemState::Failed));
-
 	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
 
 	const size_type startIndex(readSlotTotalOffset - 1);
-	const size_type endIndex(myPostWriteIterator - 1);
 
 	size_type numRedirected(0);
-	for (size_type i = 0, j = startIndex; j != endIndex && numRedirected != maxRedirects; ++i, --j) {
+	for (size_type i = 0, j = startIndex; numRedirected != aFailCount; ++i, --j) {
 		const size_type currentIndex((startIndex - i) % myCapacity);
 		CqItemContainer<T>& currentItem(myDataBlock[currentIndex]);
-		const CqItemState currentState(currentItem.GetState());
-		currentItem.Redirect(currentItem);
+		const CqItemState currentState(currentItem.GetStateLocal());
 
 		if (currentState == CqItemState::Failed) {
 			const size_type toRedirectIndex((startIndex - numRedirected) % myCapacity);
 			CqItemContainer<T>& toRedirect(myDataBlock[toRedirectIndex]);
-			toRedirect.Redirect(currentItem);
-			toRedirect.SetState(CqItemState::Valid);
 
+			toRedirect.Redirect(currentItem);
+			currentItem.SetStateLocal(CqItemState::Valid);
 			++numRedirected;
 		}
 	}
-	return numRedirected;
 }
 template<class T>
 inline CqBuffer<T>* const CqBuffer<T>::FindTail()
@@ -945,12 +940,14 @@ public:
 	inline void Assign(T& aOut);
 	inline void Move(T& aOut);
 
-	inline const CqItemState GetState() const;
 	inline const CqItemState GetStateLocal() const;
 	inline void SetState(const CqItemState aState);
 	inline void SetStateLocal(const CqItemState aState);
 
 	inline const uint8_t Iteration() const;
+
+	inline void ResetState();
+
 private:
 	// May or may not reference this container
 	inline CqItemContainer<T>& Reference() const;
@@ -982,12 +979,10 @@ inline void CqItemContainer<T>::Store(const T & aIn)
 {
 	myData = aIn;
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	const uint8_t iteration(myIteration);
-#endif
-	myReference = this;
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	myIteration = iteration;
 	myIteration += 1;
+	Redirect(*this);
+#else
+	myReference = this;
 #endif
 }
 template<class T>
@@ -995,12 +990,10 @@ inline void CqItemContainer<T>::Store(T && aIn)
 {
 	myData = std::move(aIn);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	const uint8_t iteration(myIteration);
-#endif
+	myIteration += 1;
+	Redirect(*this);
+#else
 	myReference = this;
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	myIteration = iteration;
-	++myIteration;
 #endif
 }
 template<class T>
@@ -1013,22 +1006,29 @@ inline void CqItemContainer<T>::Redirect(CqItemContainer<T>& aTo)
 template<class T>
 inline void CqItemContainer<T>::Assign(T & aOut)
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	aOut = Reference().myData;
+#else
+	aOut = myData;
+#endif
 }
 template<class T>
 inline void CqItemContainer<T>::Move(T & aOut)
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	aOut = std::move(Reference().myData);
-}
-template<class T>
-inline const CqItemState CqItemContainer<T>::GetState() const
-{
-	return Reference().myState;
+#else
+	aOut = std::move(myData);
+#endif
 }
 template<class T>
 inline void CqItemContainer<T>::SetState(const CqItemState aState)
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	Reference().myState = aState;
+#else
+	myState = aState;
+#endif
 }
 template<class T>
 inline void CqItemContainer<T>::SetStateLocal(const CqItemState aState)
@@ -1039,6 +1039,11 @@ template<class T>
 inline const uint8_t CqItemContainer<T>::Iteration() const
 {
 	return myIteration;
+}
+template<class T>
+inline void CqItemContainer<T>::ResetState()
+{
+	myReference = this;
 }
 template<class T>
 inline const CqItemState CqItemContainer<T>::GetStateLocal() const
@@ -1054,13 +1059,21 @@ template<class T>
 template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
 inline void CqItemContainer<T>::TryMove(U& aOut)
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	aOut = std::move(Reference().myData);
+#else
+	aOut = std::move(myData);
+#endif
 }
 template<class T>
 template<class U, std::enable_if_t<!std::is_move_assignable<U>::value>*>
 inline void CqItemContainer<T>::TryMove(U& aOut)
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	aOut = Reference().myData;
+#else
+	aOut = myData;
+#endif
 }
 
 enum class CqItemState : int8_t

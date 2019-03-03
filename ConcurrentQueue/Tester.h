@@ -6,8 +6,8 @@
 #include "Timer.h"
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 1;
-const uint32_t Readers = 1;
+const uint32_t Writers = 8;
+const uint32_t Readers = 16;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -33,6 +33,7 @@ private:
 	std::atomic<bool> myIsRunning;
 	std::atomic<uint32_t> myWrittenSum;
 	std::atomic<uint32_t> myReadSum;
+	std::atomic<uint32_t> myThrown;
 };
 
 template<class T>
@@ -40,7 +41,8 @@ inline Tester<T>::Tester() :
 	myIsRunning(false),
 	myWorker(Writers + Readers),
 	myWrittenSum(0),
-	myReadSum(0)
+	myReadSum(0),
+	myThrown(0)
 {
 	srand(static_cast<uint32_t>(time(0)));
 }
@@ -62,6 +64,10 @@ inline double Tester<T>::ExecuteConcurrent(uint32_t aRuns)
 		for (uint32_t j = 0; j < Readers; ++j)
 			myWorker.AddTask(std::bind(&Tester::Read, this));
 
+		myWrittenSum = 0;
+		myReadSum = 0;
+		myThrown = 0;
+
 		Timer timer;
 		myIsRunning = true;
 
@@ -73,9 +79,12 @@ inline double Tester<T>::ExecuteConcurrent(uint32_t aRuns)
 		myIsRunning = false;
 	}
 
+	std::cout << "Threw " << myThrown;
 	if (!CheckResults()) {
-		std::cout << "failed check" << std::endl;
+		std::cout << " and failed check";
 	}
+	std::cout << std::endl;
+
 	return result;
 }
 template<class T>
@@ -93,23 +102,24 @@ inline void Tester<T>::Write()
 
 	uint32_t sum(0);
 
-	for (int j = 0; j < WritesPerThread; ) {
-		const T in(rand());
-		try {
-			myQueue.Push(in);
-			++j;
-			sum += in.count;
-		}
-		catch (...) {
-		}
-	}
-
-	//for (int j = 0; j < WritesPerThread; ++j) {
-	//	const T in(1);
-	//	myQueue.Push(in);
-	//	sum += in;
+	//for (int j = 0; j < WritesPerThread; ) {
+	//	const T in(rand());
+	//	try {
+	//		myQueue.Push(in);
+	//		++j;
+	//		sum += in.count;
+	//	}
+	//	catch (...) {
+	//		//++myThrown;
+	//	}
 	//}
-	myWrittenSum += sum;
+
+	for (int j = 0; j < WritesPerThread; ++j) {
+		T in;
+		myQueue.Push(in);
+		//sum += in;
+	}
+	//myWrittenSum += sum;
 }
 
 template<class T>
@@ -120,30 +130,26 @@ inline void Tester<T>::Read()
 	uint32_t sum(0);
 
 	T out;
-	for (int j = 0; j < ReadsPerThread;) {
-		while (true) {
-
-			try {
-				if (myQueue.TryPop(out)) {
-					++j;
-					sum += out.count;
-				break;
-			}
-			}
-			catch (...) {
-			}
-
-		}
-	}
-
-	//for (int j = 0; j < ReadsPerThread; ++j) {
-	//	while (true) {
+	//for (int j = 0; j < ReadsPerThread;) {
+	//	try {
 	//		if (myQueue.TryPop(out)) {
-	//			sum += out;
-	//			break;
+	//			++j;
+	//			sum += out.count;
 	//		}
 	//	}
+	//	catch (...) {
+	//		++myThrown;
+	//	}
 	//}
-	myReadSum += sum;
+
+	for (int j = 0; j < ReadsPerThread; ++j) {
+		while (true) {
+			if (myQueue.TryPop(out)) {
+				//sum += out;
+				break;
+			}
+		}
+	}
+	//myReadSum += sum;
 }
 
