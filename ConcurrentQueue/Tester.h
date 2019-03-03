@@ -107,7 +107,7 @@ inline void Tester<T>::Write()
 		try {
 			myQueue.Push(in);
 			++j;
-			sum += in;
+			sum += in.count;
 		}
 		catch (...) {
 			++myThrown;
@@ -134,7 +134,7 @@ inline void Tester<T>::Read()
 		try {
 			if (myQueue.TryPop(out)) {
 				++j;
-				sum += out;
+				sum += out.count;
 			}
 		}
 		catch (...) {
