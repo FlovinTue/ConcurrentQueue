@@ -944,8 +944,6 @@ public:
 	inline void SetState(const CqItemState aState);
 	inline void SetStateLocal(const CqItemState aState);
 
-	inline const uint8_t Iteration() const;
-
 	inline void ResetState();
 
 private:
@@ -964,7 +962,6 @@ private:
 		{
 			uint16_t trash[3];
 			CqItemState myState;
-			uint8_t myIteration;
 		};
 	};
 };
@@ -978,23 +975,13 @@ template<class T>
 inline void CqItemContainer<T>::Store(const T & aIn)
 {
 	myData = aIn;
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	myIteration += 1;
-	Redirect(*this);
-#else
 	myReference = this;
-#endif
 }
 template<class T>
 inline void CqItemContainer<T>::Store(T && aIn)
 {
 	myData = std::move(aIn);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	myIteration += 1;
-	Redirect(*this);
-#else
 	myReference = this;
-#endif
 }
 template<class T>
 inline void CqItemContainer<T>::Redirect(CqItemContainer<T>& aTo)
@@ -1034,11 +1021,6 @@ template<class T>
 inline void CqItemContainer<T>::SetStateLocal(const CqItemState aState)
 {
 	myState = aState;
-}
-template<class T>
-inline const uint8_t CqItemContainer<T>::Iteration() const
-{
-	return myIteration;
 }
 template<class T>
 inline void CqItemContainer<T>::ResetState()
