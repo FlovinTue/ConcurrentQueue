@@ -25,7 +25,7 @@
 
 // Undefine for a slight performance increase in some
 // situations
-//#define CQ_ENABLE_EXCEPTIONHANDLING 
+#define CQ_ENABLE_EXCEPTIONHANDLING 
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -116,7 +116,7 @@ private:
 
 	// Not size_type max because we need some leaway in case  we
 	// need to throw consumers out of a buffer whilst repairing it
-	static const size_type BufferCapacityMax = ~(std::numeric_limits<size_type>::max() >> 1) / 2 - (std::numeric_limits<uint16_t>::max() - 1);
+	static const size_type BufferCapacityMax = ~(std::numeric_limits<size_type>::max() >> 3) / 2;
 	static const uint16_t MaxProducers = std::numeric_limits<int16_t>::max() - 1;
 
 	// Maximum number of times the producer slot array can grow

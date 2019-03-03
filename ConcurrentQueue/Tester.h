@@ -102,24 +102,24 @@ inline void Tester<T>::Write()
 
 	uint32_t sum(0);
 
-	//for (int j = 0; j < WritesPerThread; ) {
-	//	const T in(rand());
-	//	try {
-	//		myQueue.Push(in);
-	//		++j;
-	//		sum += in.count;
-	//	}
-	//	catch (...) {
-	//		//++myThrown;
-	//	}
-	//}
-
-	for (int j = 0; j < WritesPerThread; ++j) {
-		T in;
-		myQueue.Push(in);
-		//sum += in;
+	for (int j = 0; j < WritesPerThread; ) {
+		const T in(rand());
+		try {
+			myQueue.Push(in);
+			++j;
+			sum += in;
+		}
+		catch (...) {
+			++myThrown;
+		}
 	}
-	//myWrittenSum += sum;
+
+	//for (int j = 0; j < WritesPerThread; ++j) {
+	//	T in;
+	//	myQueue.Push(in);
+	//	sum += in;
+	//}
+	myWrittenSum += sum;
 }
 
 template<class T>
@@ -130,26 +130,26 @@ inline void Tester<T>::Read()
 	uint32_t sum(0);
 
 	T out;
-	//for (int j = 0; j < ReadsPerThread;) {
-	//	try {
-	//		if (myQueue.TryPop(out)) {
-	//			++j;
-	//			sum += out.count;
-	//		}
-	//	}
-	//	catch (...) {
-	//		++myThrown;
-	//	}
-	//}
-
-	for (int j = 0; j < ReadsPerThread; ++j) {
-		while (true) {
+	for (int j = 0; j < ReadsPerThread;) {
+		try {
 			if (myQueue.TryPop(out)) {
-				//sum += out;
-				break;
+				++j;
+				sum += out;
 			}
 		}
+		catch (...) {
+			++myThrown;
+		}
 	}
-	//myReadSum += sum;
+
+	//for (int j = 0; j < ReadsPerThread; ++j) {
+	//	while (true) {
+	//		if (myQueue.TryPop(out)) {
+	//			sum += out;
+	//			break;
+	//		}
+	//	}
+	//}
+	myReadSum += sum;
 }
 
