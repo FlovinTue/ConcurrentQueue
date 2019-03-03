@@ -25,7 +25,7 @@
 
 // Undefine for a slight performance increase in some
 // situations
-//#define CQ_ENABLE_EXCEPTIONHANDLING 
+#define CQ_ENABLE_EXCEPTIONHANDLING 
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
