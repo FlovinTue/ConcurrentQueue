@@ -23,7 +23,11 @@
 #include <atomic>
 #include <vector>
 
-// Undefine for a slight performance increase in some
+// In the event an exception is thrown during a pop operation, some entries may
+// be dequeued out-of-order as some consumers may already be halfway through a 
+// pop operation before reintegration efforts are started.
+//
+// Exception handling may be disabled for a slight performance increase in some
 // situations
 #define CQ_ENABLE_EXCEPTIONHANDLING 
 
