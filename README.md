@@ -1,6 +1,6 @@
 # ConcurrentQueue
 
-The WizardLoaf Concurrent Queue\n
+The WizardLoaf Concurrent Queue
 Made for the x86/x64 architecture in Visual Studio 2017, focusing
 on performance. The Queue preserves the FIFO property within the 
 context of single producers. Push operations are wait-free, TryPop & Size 
