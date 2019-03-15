@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <vector>
+#include <limits>
 
 // In the event an exception is thrown during a pop operation, some entries may
 // be dequeued out-of-order as some consumers may already be halfway through a 
