@@ -83,7 +83,7 @@ template <class T>
 class ConcurrentQueue
 {
 public:
-	typedef size_t size_type;
+	typedef std::size_t size_type;
 
 	inline ConcurrentQueue();
 	inline ConcurrentQueue(size_type aInitProducerCapacity);
@@ -96,7 +96,7 @@ public:
 
 	// The Size method can be considered an approximation, and may be 
 	// innacurate at the time the caller receives the result.
-	inline const size_t Size() const;
+	inline const std::size_t Size() const;
 private:
 	friend class CqBuffer<T>;
 
@@ -107,7 +107,7 @@ private:
 
 	inline const bool RelocateConsumer();
 
-	inline __declspec(restrict)CqBuffer<T>* const CreateProducerBuffer(const size_t aSize) const;
+	inline __declspec(restrict)CqBuffer<T>* const CreateProducerBuffer(const std::size_t aSize) const;
 	inline void PushProducerBuffer(CqBuffer<T>* const aBuffer);
 	inline void TryAllocProducerStoreSlot(const uint8_t aStoreArraySlot);
 	inline void TrySwapProducerArray(const uint8_t aFromStoreArraySlot);
@@ -117,7 +117,7 @@ private:
 	inline CqBuffer<T>* const FetchFromStore(const uint16_t aStoreSlot) const;
 	inline void InsertToStore(CqBuffer<T>* const aBuffer, const uint16_t aStoreSlot);
 	inline const uint8_t ToStoreArraySlot(const uint16_t aStoreSlot) const;
-	inline const size_type Log2Align(const size_t aFrom, const size_t aClamp) const;
+	inline const size_type Log2Align(const std::size_t aFrom, const std::size_t aClamp) const;
 
 	// Not size_type max because we need some leaway in case  we
 	// need to throw consumers out of a buffer whilst repairing it
@@ -211,7 +211,7 @@ template<class T>
 template<class ...Arg>
 inline void ConcurrentQueue<T>::PushInternal(Arg&& ...aIn)
 {
-	const size_t producerSlot(myObjectId);
+	const std::size_t producerSlot(myObjectId);
 
 	if (!(producerSlot < ourProducers.size()))
 		ourProducers.resize(producerSlot + 1, nullptr);
@@ -232,7 +232,7 @@ inline void ConcurrentQueue<T>::PushInternal(Arg&& ...aIn)
 template<class T>
 const bool ConcurrentQueue<T>::TryPop(T & aOut)
 {
-	const size_t consumerSlot(myObjectId);
+	const std::size_t consumerSlot(myObjectId);
 	if (!(consumerSlot < ourConsumers.size()))
 		ourConsumers.resize(consumerSlot + 1, &ourDummyBuffer);
 
@@ -250,11 +250,11 @@ const bool ConcurrentQueue<T>::TryPop(T & aOut)
 	return true;
 }
 template<class T>
-inline const size_t ConcurrentQueue<T>::Size() const
+inline const std::size_t ConcurrentQueue<T>::Size() const
 {
 	const uint16_t producerCount(myProducerCount.load(std::memory_order_relaxed));
 
-	size_t size(0);
+	std::size_t size(0);
 	for (uint16_t i = 0; i < producerCount; ++i) {
 		size += myProducerSlots[i]->Size();
 	}
@@ -300,17 +300,17 @@ inline const bool ConcurrentQueue<T>::RelocateConsumer()
 	return false;
 }
 template<class T>
-inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducerBuffer(const size_t aSize) const
+inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducerBuffer(const std::size_t aSize) const
 {
-	const size_t size(Log2Align(aSize, BufferCapacityMax));
+	const std::size_t size(Log2Align(aSize, BufferCapacityMax));
 
-	const size_t bufferSize(sizeof(CqBuffer<T>));
-	const size_t dataBlockSize(sizeof(CqItemContainer<T>) * size);
+	const std::size_t bufferSize(sizeof(CqBuffer<T>));
+	const std::size_t dataBlockSize(sizeof(CqItemContainer<T>) * size);
 
-	const size_t totalBlockSize(bufferSize + dataBlockSize);
+	const std::size_t totalBlockSize(bufferSize + dataBlockSize);
 
-	const size_t bufferOffset(0);
-	const size_t dataBlockOffset(bufferOffset + bufferSize);
+	const std::size_t bufferOffset(0);
+	const std::size_t dataBlockOffset(bufferOffset + bufferSize);
 
 	uint8_t* totalBlock(nullptr);
 	CqBuffer<T>* buffer(nullptr);
@@ -493,16 +493,16 @@ inline const uint8_t ConcurrentQueue<T>::ToStoreArraySlot(const uint16_t aStoreS
 	return sourceStoreSlot;
 }
 template<class T>
-inline const typename ConcurrentQueue<T>::size_type ConcurrentQueue<T>::Log2Align(const size_t aFrom, const size_t aClamp) const
+inline const typename ConcurrentQueue<T>::size_type ConcurrentQueue<T>::Log2Align(const std::size_t aFrom, const std::size_t aClamp) const
 {
-	const size_t from(aFrom < 2 ? 2 : aFrom);
+	const std::size_t from(aFrom < 2 ? 2 : aFrom);
 
 	const float flog2(std::log2f(static_cast<float>(from)));
 	const float nextLog2(std::ceil(flog2));
 	const float fNextVal(std::powf(2.f, nextLog2));
 
-	const size_t nextVal(static_cast<size_t>(fNextVal));
-	const size_t clampedNextVal((aClamp < nextVal) ? aClamp : nextVal);
+	const std::size_t nextVal(static_cast<size_t>(fNextVal));
+	const std::size_t clampedNextVal((aClamp < nextVal) ? aClamp : nextVal);
 
 	return static_cast<size_type>(clampedNextVal);
 }
@@ -523,7 +523,7 @@ public:
 	// Deallocates all buffers in the list
 	inline void DestroyAll();
 
-	inline const size_t Size() const;
+	inline const std::size_t Size() const;
 
 	__declspec(noalias) inline const size_type Capacity() const;
 
@@ -664,10 +664,10 @@ inline CqBuffer<T>* const CqBuffer<T>::FindBack()
 }
 
 template<class T>
-inline const size_t CqBuffer<T>::Size() const
+inline const std::size_t CqBuffer<T>::Size() const
 {
-	size_t size(myPostWriteIterator);
-	const size_t readSlot(myReadSlot.load());
+	std::size_t size(myPostWriteIterator);
+	const std::size_t readSlot(myReadSlot.load());
 	size -= readSlot;
 
 	if (myNext)
