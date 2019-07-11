@@ -83,7 +83,7 @@ template <class T>
 class ConcurrentQueue
 {
 public:
-	typedef uint32_t size_type;
+	typedef size_t size_type;
 
 	inline ConcurrentQueue();
 	inline ConcurrentQueue(size_type aInitProducerCapacity);
@@ -101,7 +101,7 @@ private:
 	friend class CqBuffer<T>;
 
 	template <class ...Arg>
-	void Push(Arg... aIn);
+	void PushInternal(Arg&&... aIn);
 
 	inline void InitProducer();
 
@@ -200,16 +200,16 @@ inline ConcurrentQueue<T>::~ConcurrentQueue()
 template<class T>
 void ConcurrentQueue<T>::Push(const T & aIn)
 {
-	Push<const T&>(aIn);
+	PushInternal<const T&>(aIn);
 }
 template<class T>
 inline void ConcurrentQueue<T>::Push(T && aIn)
 {
-	Push<T&&>(std::move(aIn));
+	PushInternal<T&&>(std::move(aIn));
 }
 template<class T>
 template<class ...Arg>
-inline void ConcurrentQueue<T>::Push(Arg ...aIn)
+inline void ConcurrentQueue<T>::PushInternal(Arg&& ...aIn)
 {
 	const size_t producerSlot(myObjectId);
 
