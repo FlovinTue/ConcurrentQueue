@@ -30,7 +30,7 @@
 //
 // Exception handling may be disabled for a slight performance increase in some
 // situations
-//#define CQ_ENABLE_EXCEPTIONHANDLING 
+#define CQ_ENABLE_EXCEPTIONHANDLING 
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -376,7 +376,7 @@ inline void ConcurrentQueue<T>::TryAllocProducerStoreSlot(const uint8_t aStoreAr
 	memset(&newProducerSlotBlock[0], 0, sizeof(CqBuffer<T>**) * producerCapacity);
 
 	CqBuffer<T>** expected(nullptr);
-	if (!myProducerArrayStore[aStoreArraySlot].compare_exchange_strong(expected, newProducerSlotBlock, std::memory_order_acquire, std::memory_order_release)) {
+	if (!myProducerArrayStore[aStoreArraySlot].compare_exchange_strong(expected, newProducerSlotBlock, std::memory_order_acq_rel, std::memory_order_acquire)) {
 		delete[] newProducerSlotBlock;
 	}
 }
@@ -401,14 +401,14 @@ inline void ConcurrentQueue<T>::TrySwapProducerArray(const uint8_t aFromStoreArr
 			break;
 		}
 		CqBuffer<T>** const desiredProducerArray(myProducerArrayStore[aFromStoreArraySlot].load(std::memory_order_acquire));
-		if (myProducerSlots.compare_exchange_strong(expectedProducerArray, desiredProducerArray, std::memory_order_acquire, std::memory_order_release)) {
+		if (myProducerSlots.compare_exchange_strong(expectedProducerArray, desiredProducerArray, std::memory_order_acq_rel, std::memory_order_acquire)) {
 
 			for (uint16_t expectedCapacity(myProducerCapacity.load(std::memory_order_acquire));; expectedCapacity = myProducerCapacity.load(std::memory_order_acquire)) {
 				if (!(expectedCapacity < targetCapacity)) {
 
 					break;
 				}
-				if (myProducerCapacity.compare_exchange_strong(expectedCapacity, targetCapacity, std::memory_order_acquire, std::memory_order_release)) {
+				if (myProducerCapacity.compare_exchange_strong(expectedCapacity, targetCapacity, std::memory_order_acq_rel, std::memory_order_acquire)) {
 					break;
 				}
 			}
@@ -425,7 +425,7 @@ inline void ConcurrentQueue<T>::TrySwapProducerCount(const uint16_t aToValue)
 	for (uint16_t i = myProducerCount.load(std::memory_order_acquire); i < desired; i = myProducerCount.load(std::memory_order_acquire)) {
 		uint16_t expected(i);
 
-		if (myProducerCount.compare_exchange_strong(expected, desired, std::memory_order_acquire, std::memory_order_release)) {
+		if (myProducerCount.compare_exchange_strong(expected, desired, std::memory_order_acq_rel, std::memory_order_acquire)) {
 			break;
 		}
 	}
@@ -738,7 +738,7 @@ inline void CqBuffer<T>::CheckRepairs()
 
 	uint16_t expected(failiureIndex);
 	const uint16_t desired(failiureCount);
-	if (myFailiureIndex.compare_exchange_strong(expected, desired, std::memory_order_acquire, std::memory_order_release)) {
+	if (myFailiureIndex.compare_exchange_strong(expected, desired, std::memory_order_acq_rel, std::memory_order_acquire)) {
 		ReintegrateFailedEntries(toReintegrate);
 
 		myPostReadIterator.fetch_sub(toReintegrate);
