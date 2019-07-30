@@ -309,14 +309,15 @@ inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducer
 
 	const std::size_t totalBlockSize(bufferSize + dataBlockSize);
 
+	const std::size_t alignmentPadding(bufferSize % 8);
+
 	const std::size_t bufferOffset(0);
-	const std::size_t dataBlockOffset(bufferOffset + bufferSize);
+	const std::size_t dataBlockOffset(bufferOffset + bufferSize + alignmentPadding);
 
 	uint8_t* totalBlock(nullptr);
 	CqBuffer<T>* buffer(nullptr);
 	CqItemContainer<T>* data(nullptr);
 
-	const uint8_t alignmentPadding(8);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	try {
