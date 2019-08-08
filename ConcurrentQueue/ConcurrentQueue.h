@@ -290,7 +290,7 @@ inline const bool ConcurrentQueue<T>::RelocateConsumer()
 			ourConsumers[myObjectId] = buffer;
 
 			if (myProducerSlots[entry] != buffer) {
-				if (buffer->VerifyAsReplacement()) {			
+				if (buffer->VerifyAsReplacement()) {
 					myProducerSlots[entry] = buffer;
 				}
 			}
@@ -306,23 +306,24 @@ inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducer
 
 	const std::size_t bufferSize(sizeof(CqBuffer<T>));
 	const std::size_t dataBlockSize(sizeof(CqItemContainer<T>) * size);
+	const std::size_t alignment(alignof(T));
 
-	const std::size_t totalBlockSize(bufferSize + dataBlockSize);
-
-	const std::size_t alignmentPadding(bufferSize % 8);
-
-	const std::size_t bufferOffset(0);
-	const std::size_t dataBlockOffset(bufferOffset + bufferSize + alignmentPadding);
+	const std::size_t totalBlockSize(bufferSize + dataBlockSize + alignment);
 
 	uint8_t* totalBlock(nullptr);
 	CqBuffer<T>* buffer(nullptr);
 	CqItemContainer<T>* data(nullptr);
 
-
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	try {
 #endif
-		totalBlock = new uint8_t[totalBlockSize + alignmentPadding];
+		totalBlock = new uint8_t[totalBlockSize];
+		
+		const std::size_t bufferOffset(0);
+		const std::size_t bufferEndAddr(reinterpret_cast<std::size_t>(totalBlock + bufferSize));
+		const std::size_t alignmentRemainder(bufferEndAddr % alignment);
+		const std::size_t alignmentOffset(alignment - alignmentRemainder);
+		const std::size_t dataBlockOffset(bufferSize + alignmentOffset);
 
 		data = new (totalBlock + dataBlockOffset) CqItemContainer<T>[size];
 		buffer = new(totalBlock + bufferOffset) CqBuffer<T>(static_cast<size_type>(size), data);
