@@ -52,9 +52,9 @@ public:
 #endif
 
 #ifndef MAKE_UNIQUE_NAME 
-#define _CONCAT_(a,b)  a##b
-#define _EXPAND_AND_CONCAT_(a, b) _CONCAT_(a,b)
-#define MAKE_UNIQUE_NAME(prefix) _EXPAND_AND_CONCAT_(prefix, __COUNTER__)
+#define CONCAT(a,b)  a##b
+#define EXPAND_AND_CONCAT(a, b) CONCAT(a,b)
+#define MAKE_UNIQUE_NAME(prefix) EXPAND_AND_CONCAT(prefix, __COUNTER__)
 #endif
 
 #define CQ_PADDING(bytes) const uint8_t MAKE_UNIQUE_NAME(trash)[bytes] {}
@@ -322,8 +322,8 @@ inline __declspec(restrict)CqBuffer<T>* const ConcurrentQueue<T>::CreateProducer
 		const std::size_t bufferOffset(0);
 		const std::size_t bufferEndAddr(reinterpret_cast<std::size_t>(totalBlock + bufferSize));
 		const std::size_t alignmentRemainder(bufferEndAddr % alignment);
-		const std::size_t alignmentOffset(alignment - alignmentRemainder);
-		const std::size_t dataBlockOffset(bufferSize + alignmentOffset);
+		const std::size_t alignmentOffset(alignment - (alignmentRemainder ? alignmentRemainder : alignment));
+		const std::size_t dataBlockOffset(bufferOffset + bufferSize + alignmentOffset);
 
 		data = new (totalBlock + dataBlockOffset) CqItemContainer<T>[size];
 		buffer = new(totalBlock + bufferOffset) CqBuffer<T>(static_cast<size_type>(size), data);
