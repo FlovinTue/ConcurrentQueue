@@ -2,7 +2,7 @@
 
 #include <thread>
 #include "ThreadPool.h"
-#include "ConcurrentQueue.h"
+#include "concurrent_queue.h"
 #include "Timer.h"
 
 const uint32_t Writes = 2048;
@@ -26,7 +26,7 @@ private:
 	void Write();
 	void Read();
 
-	ConcurrentQueue<T> myQueue;
+	cq::concurrent_queue<T> myQueue;
 
 	ThreadPool myWorker;
 
@@ -105,7 +105,7 @@ inline void Tester<T>::Write()
 	for (int j = 0; j < WritesPerThread; ) {
 		const T in(rand());
 		try {
-			myQueue.Push(in);
+			myQueue.push(in);
 			++j;
 			sum += in.count;
 		}
@@ -116,7 +116,7 @@ inline void Tester<T>::Write()
 
 	//for (int j = 0; j < WritesPerThread; ++j) {
 	//	T in(1);
-	//	myQueue.Push(in);
+	//	myQueue.push(in);
 	//	sum += in;
 	//}
 	myWrittenSum += sum;
@@ -132,7 +132,7 @@ inline void Tester<T>::Read()
 	T out;
 	for (int j = 0; j < ReadsPerThread;) {
 		try {
-			if (myQueue.TryPop(out)) {
+			if (myQueue.try_pop(out)) {
 				++j;
 				sum += out.count;
 			}
@@ -144,7 +144,7 @@ inline void Tester<T>::Read()
 
 	//for (int j = 0; j < ReadsPerThread; ++j) {
 	//	while (true) {
-	//		if (myQueue.TryPop(out)) {
+	//		if (myQueue.try_pop(out)) {
 	//			sum += out;
 	//			break;
 	//		}

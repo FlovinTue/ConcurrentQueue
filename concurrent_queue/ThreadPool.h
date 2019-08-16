@@ -2,9 +2,10 @@
 
 #include <functional>
 #include <thread>
-#include "ConcurrentQueue.h"
 #include <atomic>
 #include <concurrent_queue.h>
+#include <vector>
+
 class ThreadPool
 {
 public:
