@@ -96,6 +96,8 @@ public:
 
 	const bool try_pop(T& out);
 
+	void unsafe_clear();
+
 	// The Size method can be considered an approximation, and may be 
 	// innacurate at the time the caller receives the result.
 	inline const std::size_t size() const;
@@ -250,6 +252,17 @@ const bool concurrent_queue<T>::try_pop(T & out)
 		buffer = ourConsumers[consumerSlot];
 	}
 	return true;
+}
+template<class T>
+inline void concurrent_queue<T>::unsafe_clear()
+{
+	std::atomic_thread_fence(std::memory_order_acquire);
+
+	for (uint16_t i = 0; i < myProducerCount.load(std::memory_order_relaxed); ++i) {
+		myProducerSlots[i]->unsafe_clear();
+	}
+
+	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T>
 inline const std::size_t concurrent_queue<T>::size() const
@@ -543,6 +556,9 @@ public:
 	// Pushes a newly allocated buffer buffer to the front of the 
 	// buffer list
 	inline void push_front(producer_buffer<T>* const aNewBuffer);
+
+	inline void unsafe_clear();
+
 private:
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>* = nullptr>
 	inline void write_in(const size_type aSlot, U&& in);
@@ -760,6 +776,23 @@ inline void producer_buffer<T>::push_front(producer_buffer<T>* const aNewBuffer)
 	}
 	last->myNext = aNewBuffer;
 	aNewBuffer->myPrevious = last;
+}
+template<class T>
+inline void producer_buffer<T>::unsafe_clear()
+{
+	myPreReadIterator.store(myPostWriteIterator.load(std::memory_order_relaxed));
+	myReadSlot.store(myPostWriteIterator.load(std::memory_order_relaxed));
+
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	myFailiureCount.store(0, std::memory_order_relaxed);
+	myFailiureIndex.store(0, std::memory_order_relaxed);
+	myValidFlag = true;
+
+	myPostReadIterator.store(myPostWriteIterator.load(std::memory_order_relaxed));
+#endif
+	if (myNext) {
+		myNext->unsafe_clear();
+	}
 }
 template<class T>
 template<class ...Arg>

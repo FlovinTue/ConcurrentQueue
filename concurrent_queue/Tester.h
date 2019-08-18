@@ -74,6 +74,8 @@ inline double Tester<T>::ExecuteConcurrent(uint32_t aRuns)
 		while (myWorker.HasUnfinishedTasks())
 			std::this_thread::yield();
 
+		myQueue.unsafe_clear();
+
 		result += timer.GetTotalTime();
 
 		myIsRunning = false;
