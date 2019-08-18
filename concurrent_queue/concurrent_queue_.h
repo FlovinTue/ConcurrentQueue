@@ -38,6 +38,9 @@
 #define CQ_BUFFER_NOTHROW_PUSH_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
 #define CQ_BUFFER_NOTHROW_PUSH_ASSIGN(type) (std::is_nothrow_assignable<type&, type>::value)
 
+#undef min
+#undef max
+
 namespace cq {
 
 class producer_overflow : public std::runtime_error
@@ -64,9 +67,6 @@ public:
 // For anonymous struct
 #pragma warning(push)
 #pragma warning(disable : 4201) 
-
-#undef max
-#undef min
 
 template <class T>
 class producer_buffer;
@@ -440,7 +440,7 @@ inline const uint16_t concurrent_queue<T>::claim_store_slot()
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	const uint16_t preIteration(myProducerSlotPreIterator.fetch_add(1, std::memory_order_acq_rel));
 	const uint8_t minimumStoreArraySlot(to_store_array_slot(preIteration));
-	const uint8_t minimumStoreArraySlotClamp(std::min<uint8_t>(minimumStoreArraySlot, Producer_Slots_Max_Growth_Count - 1));
+	const uint8_t minimumStoreArraySlotClamp((Producer_Slots_Max_Growth_Count - 1 < minimumStoreArraySlot ? Producer_Slots_Max_Growth_Count - 1 : minimumStoreArraySlot));
 
 	if (!myProducerArrayStore[minimumStoreArraySlotClamp].load(std::memory_order_acquire)) {
 		try {
