@@ -258,7 +258,7 @@ inline const std::size_t concurrent_queue<T>::size() const
 
 	std::size_t size(0);
 	for (uint16_t i = 0; i < producerCount; ++i) {
-		size += myProducerSlots[i]->Size();
+		size += myProducerSlots[i]->size();
 	}
 	return size;
 }
