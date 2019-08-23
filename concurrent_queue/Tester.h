@@ -100,6 +100,8 @@ inline bool Tester<T>::CheckResults() const
 template<class T>
 inline void Tester<T>::Write()
 {
+	myQueue.reserve(WritesPerThread);
+
 	while (!myIsRunning);
 
 	uint32_t sum(0);

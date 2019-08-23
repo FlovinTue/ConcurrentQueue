@@ -96,6 +96,9 @@ public:
 
 	const bool try_pop(T& out);
 
+	// Reserves a minimum capacity for the calling producer
+	inline void reserve(const size_type capacity);
+
 	void unsafe_clear();
 
 	// The Size method can be considered an approximation, and may be 
@@ -107,7 +110,7 @@ private:
 	template <class ...Arg>
 	void push_internal(Arg&&... in);
 
-	inline void init_producer();
+	inline void init_producer(const size_type withCapacity);
 
 	inline const bool relocate_consumer();
 
@@ -121,7 +124,7 @@ private:
 	inline producer_buffer<T>* const fetch_from_store(const uint16_t storeSlot) const;
 	inline void insert_to_store(producer_buffer<T>* const buffer, const uint16_t storeSlot);
 	inline const uint8_t to_store_array_slot(const uint16_t storeSlot) const;
-	inline const size_type log2_align(const std::size_t from, const std::size_t clamp) const;
+	inline constexpr const size_type log2_align(const std::size_t from, const std::size_t clamp) const;
 
 	// Not size_type max because we need some leaway in case  we
 	// need to throw consumers out of a buffer whilst repairing it
@@ -223,7 +226,7 @@ inline void concurrent_queue<T>::push_internal(Arg&& ...in)
 	producer_buffer<T>* buffer(ourProducers[producerSlot]);
 
 	if (!buffer) {
-		init_producer();
+		init_producer(myInitBufferCapacity);
 		buffer = ourProducers[producerSlot];
 	}
 	if (!buffer->try_push(std::forward<Arg>(in)...)) {
@@ -254,6 +257,25 @@ const bool concurrent_queue<T>::try_pop(T & out)
 	return true;
 }
 template<class T>
+inline void concurrent_queue<T>::reserve(const size_type capacity)
+{
+	const std::size_t producerSlot(myObjectId);
+
+	if (!(producerSlot < ourProducers.size()))
+		ourProducers.resize(producerSlot + 1, nullptr);
+
+	if (!ourProducers[producerSlot]) {
+		init_producer(capacity);
+		return;
+	}
+	if (ourProducers[producerSlot]->capacity() < capacity) {
+		const size_type alignedCapacity(log2_align(capacity, Buffer_Capacity_Max));
+		producer_buffer<T>* const buffer(create_producer_buffer(alignedCapacity));
+		ourProducers[producerSlot]->push_front(buffer);
+		ourProducers[producerSlot] = buffer;
+	}
+}
+template<class T>
 inline void concurrent_queue<T>::unsafe_clear()
 {
 	std::atomic_thread_fence(std::memory_order_acquire);
@@ -276,9 +298,9 @@ inline const std::size_t concurrent_queue<T>::size() const
 	return size;
 }
 template<class T>
-inline void concurrent_queue<T>::init_producer()
+inline void concurrent_queue<T>::init_producer(const size_type withCapacity)
 {
-	producer_buffer<T>* const newBuffer(create_producer_buffer(myInitBufferCapacity));
+	producer_buffer<T>* const newBuffer(create_producer_buffer(withCapacity));
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	try {
 #endif
@@ -510,7 +532,7 @@ inline const uint8_t concurrent_queue<T>::to_store_array_slot(const uint16_t sto
 	return sourceStoreSlot;
 }
 template<class T>
-inline const typename concurrent_queue<T>::size_type concurrent_queue<T>::log2_align(const std::size_t from, const std::size_t clamp) const
+inline constexpr const typename concurrent_queue<T>::size_type concurrent_queue<T>::log2_align(const std::size_t from, const std::size_t clamp) const
 {
 	const std::size_t from_(from < 2 ? 2 : from);
 
