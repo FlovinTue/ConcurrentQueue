@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?> 
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+  <Type Name="cq::concurrent_queue&lt;*&gt;">
+    <DisplayString>{{producer_count = {myProducerCount._My_val}}}</DisplayString>
+    <Expand>
+      <Item Name="[producer_count]">myProducerCount._My_val</Item>
+      <ArrayItems>
+        <Size>myProducerCount._My_val</Size>
+        <ValuePointer>myDebugView</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+  <Type Name="cq::producer_buffer&lt;*&gt;">
+    <DisplayString>
+      {{size = {myPostWriteIterator._My_val - myReadSlot._My_val}}}</DisplayString>
+    <Expand>
+      <Item Name="[size]">
+        myPostWriteIterator._My_val - myReadSlot._My_val
+      </Item>
+      <Item Name="[capacity]">myCapacity</Item>
+      <Item Name="[next]">myNext</Item>
+      <ArrayItems>
+        <Size>myPostWriteIterator._My_val - myReadSlot._My_val</Size>
+        <ValuePointer>myDataBlock</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+  <Type Name="cq::item_container&lt;*&gt;">
+    <DisplayString>{{item = {myData}}}</DisplayString>
+    <Expand>
+      <Item Name="[item]">myData</Item>
+    </Expand>
+  </Type>
+  
+  
+</AutoVisualizer>
+
+

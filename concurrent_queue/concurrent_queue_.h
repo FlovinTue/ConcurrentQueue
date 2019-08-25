@@ -147,7 +147,12 @@ private:
 	static producer_buffer<T> ourDummyBuffer;
 
 	std::atomic<producer_buffer<T>**> myProducerArrayStore[Producer_Slots_Max_Growth_Count];
-	std::atomic<producer_buffer<T>**> myProducerSlots;
+
+	union
+	{
+		std::atomic<producer_buffer<T>**> myProducerSlots;
+		producer_buffer<T>** myDebugView;
+	};
 	std::atomic<uint16_t> myProducerCount;
 	std::atomic<uint16_t> myProducerCapacity;
 	std::atomic<uint16_t> myProducerSlotReservation;
@@ -617,7 +622,7 @@ private:
 
 	size_type myWriteSlot;
 	std::atomic<size_type> myPostWriteIterator;
-
+	
 	// The tail becomes the de-facto storage place for unused buffers,
 	// until they are destroyed with the entire structure
 	producer_buffer<T>* myPrevious;
