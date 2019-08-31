@@ -26,7 +26,7 @@ private:
 	void Write();
 	void Read();
 
-	cq::concurrent_queue<T> myQueue;
+	gdul::concurrent_queue<T> myQueue;
 
 	ThreadPool myWorker;
 
