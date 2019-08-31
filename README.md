@@ -1,11 +1,8 @@
-# ConcurrentQueue
+# concurrent_queue
 
-The WizardLoaf Concurrent Queue.
-
-Made for the x86/x64 architecture in Visual Studio 2017, focusing
-on performance. The Queue preserves the FIFO property within the 
-context of single producers. Push operations are wait-free, TryPop & Size 
-are lock-free and producer capacities grows dynamically.
+The Queue preserves the FIFO property within the 
+context of single producers. push is wait-free(as long as no allocation needs to be made), 
+try_pop & size are lock-free and producer capacities grows dynamically.
 
 Features basic exception safety (May be turned off for a slight performance increase).
-Just include ConcurrentQueue.h and go :)
+Just include concurrent_queue_.h (optionally concurrent_queue.natvis) and go :) 
