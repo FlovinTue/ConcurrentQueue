@@ -28,9 +28,10 @@
 // be dequeued out-of-order as some consumers may already be halfway through a 
 // pop operation before reintegration efforts are started.
 //
-// Exception handling may be disabled for a slight performance increase in some
-// situations
-#define CQ_ENABLE_EXCEPTIONHANDLING 
+// Exception handling may be enabled for basic exception safety at the cost of 
+// a slight performance decrease
+
+/*#define CQ_ENABLE_EXCEPTIONHANDLING */
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
