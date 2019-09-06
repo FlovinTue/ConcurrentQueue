@@ -67,7 +67,7 @@ namespace cqdetail {
 class producer_overflow : public std::runtime_error
 {
 public:
-	producer_overflow(const char* aError) : runtime_error(aError) {}
+	producer_overflow(const char* errorMessage) : runtime_error(errorMessage) {}
 };
 
 
@@ -92,51 +92,51 @@ public:
 	typedef std::size_t size_type;
 
 	inline concurrent_queue();
-	inline concurrent_queue(const size_type initProducerCapacity);
+	inline concurrent_queue(size_type initProducerCapacity);
 	inline ~concurrent_queue();
 
 	inline void push(const T& in);
 	inline void push(T&& in);
 
-	const bool try_pop(T& out);
+	bool try_pop(T& out);
 
 	// Reserves a minimum capacity for the calling producer
-	inline void reserve(const size_type capacity);
+	inline void reserve(size_type capacity);
 
 	void unsafe_clear();
 
 	// The Size method can be considered an approximation, and may be 
 	// innacurate at the time the caller receives the result.
-	inline const std::size_t size() const;
+	inline std::size_t size() const;
 private:
 	friend class cqdetail::producer_buffer<T>;
 
 	template <class ...Arg>
 	void push_internal(Arg&&... in);
 
-	inline void init_producer(const size_type withCapacity);
+	inline void init_producer(size_type withCapacity);
 
-	inline const bool relocate_consumer();
+	inline bool relocate_consumer();
 
-	inline __declspec(restrict)cqdetail::producer_buffer<T>* const create_producer_buffer(const std::size_t withSize) const;
-	inline void push_producer_buffer(cqdetail::producer_buffer<T>* const buffer);
-	inline void try_alloc_produer_store_slot(const uint8_t storeArraySlot);
-	inline void try_swap_producer_array(const uint8_t aromStoreArraySlot);
-	inline void try_swap_producer_count(const uint16_t toValue);
+	inline __declspec(restrict)cqdetail::producer_buffer<T>* create_producer_buffer(std::size_t withSize) const;
+	inline void push_producer_buffer(cqdetail::producer_buffer<T>* buffer);
+	inline void try_alloc_produer_store_slot(uint8_t storeArraySlot);
+	inline void try_swap_producer_array(uint8_t aromStoreArraySlot);
+	inline void try_swap_producer_count(uint16_t toValue);
 
-	inline const uint16_t claim_store_slot();
-	inline cqdetail::producer_buffer<T>* const fetch_from_store(const uint16_t storeSlot) const;
-	inline void insert_to_store(cqdetail::producer_buffer<T>* const buffer, const uint16_t storeSlot);
-	inline const uint8_t to_store_array_slot(const uint16_t storeSlot) const;
-	inline constexpr const size_type log2_align(const std::size_t from, const std::size_t clamp) const;
+	inline uint16_t claim_store_slot();
+	inline cqdetail::producer_buffer<T>* fetch_from_store(uint16_t storeSlot) const;
+	inline void insert_to_store(cqdetail::producer_buffer<T>* buffer, uint16_t storeSlot);
+	inline uint8_t to_store_array_slot(uint16_t storeSlot) const;
+	inline constexpr size_type log2_align(std::size_t from, std::size_t clamp) const;
 
 	// Not size_type max because we need some leaway in case  we
 	// need to throw consumers out of a buffer whilst repairing it
-	static const size_type Buffer_Capacity_Max = ~(std::numeric_limits<size_type>::max() >> 3) / 2;
-	static const uint16_t Max_Producers = std::numeric_limits<int16_t>::max() - 1;
+	static constexpr size_type Buffer_Capacity_Max = ~(std::numeric_limits<size_type>::max() >> 3) / 2;
+	static constexpr uint16_t Max_Producers = std::numeric_limits<int16_t>::max() - 1;
 
 	// Maximum number of times the producer slot array can grow
-	static const uint8_t Producer_Slots_Max_Growth_Count = 15;
+	static constexpr uint8_t Producer_Slots_Max_Growth_Count = 15;
 
 	static std::atomic<size_type> ourObjectIterator;
 
@@ -183,7 +183,7 @@ inline concurrent_queue<T>::concurrent_queue()
 {
 }
 template<class T>
-inline concurrent_queue<T>::concurrent_queue(size_type initProducerCapacity)
+inline concurrent_queue<T>::concurrent_queue(typename concurrent_queue<T>::size_type initProducerCapacity)
 	: myObjectId(ourObjectIterator++)
 	, myProducerCapacity(0)
 	, myProducerCount(0)
@@ -239,14 +239,14 @@ inline void concurrent_queue<T>::push_internal(Arg&& ...in)
 		buffer = ourProducers[producerSlot];
 	}
 	if (!buffer->try_push(std::forward<Arg>(in)...)) {
-		cqdetail::producer_buffer<T>* const next(create_producer_buffer(size_t(buffer->capacity()) * 2));
+		cqdetail::producer_buffer<T>* const next(create_producer_buffer(std::size_t(buffer->get_capacity()) * 2));
 		buffer->push_front(next);
 		ourProducers[producerSlot] = next;
 		next->try_push(std::forward<Arg>(in)...);
 	}
 }
 template<class T>
-const bool concurrent_queue<T>::try_pop(T & out)
+bool concurrent_queue<T>::try_pop(T & out)
 {
 	const std::size_t consumerSlot(myObjectId);
 	if (!(consumerSlot < ourConsumers.size()))
@@ -266,7 +266,7 @@ const bool concurrent_queue<T>::try_pop(T & out)
 	return true;
 }
 template<class T>
-inline void concurrent_queue<T>::reserve(const size_type capacity)
+inline void concurrent_queue<T>::reserve(typename concurrent_queue<T>::size_type capacity)
 {
 	const std::size_t producerSlot(myObjectId);
 
@@ -277,7 +277,7 @@ inline void concurrent_queue<T>::reserve(const size_type capacity)
 		init_producer(capacity);
 		return;
 	}
-	if (ourProducers[producerSlot]->capacity() < capacity) {
+	if (ourProducers[producerSlot]->get_capacity() < capacity) {
 		const size_type alignedCapacity(log2_align(capacity, Buffer_Capacity_Max));
 		cqdetail::producer_buffer<T>* const buffer(create_producer_buffer(alignedCapacity));
 		ourProducers[producerSlot]->push_front(buffer);
@@ -296,18 +296,18 @@ inline void concurrent_queue<T>::unsafe_clear()
 	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T>
-inline const std::size_t concurrent_queue<T>::size() const
+inline std::size_t concurrent_queue<T>::size() const
 {
 	const uint16_t producerCount(myProducerCount.load(std::memory_order_relaxed));
 
-	std::size_t size(0);
+	std::size_t accumulatedSize(0);
 	for (uint16_t i = 0; i < producerCount; ++i) {
-		size += myProducerSlots[i]->size();
+		accumulatedSize += myProducerSlots[i]->size();
 	}
-	return size;
+	return accumulatedSize;
 }
 template<class T>
-inline void concurrent_queue<T>::init_producer(const size_type withCapacity)
+inline void concurrent_queue<T>::init_producer(typename concurrent_queue<T>::size_type withCapacity)
 {
 	cqdetail::producer_buffer<T>* const newBuffer(create_producer_buffer(withCapacity));
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
@@ -324,7 +324,7 @@ inline void concurrent_queue<T>::init_producer(const size_type withCapacity)
 	ourProducers[myObjectId] = newBuffer;
 }
 template<class T>
-inline const bool concurrent_queue<T>::relocate_consumer()
+inline bool concurrent_queue<T>::relocate_consumer()
 {
 	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 	const uint16_t relocation(ourRelocationIndex--);
@@ -346,12 +346,12 @@ inline const bool concurrent_queue<T>::relocate_consumer()
 	return false;
 }
 template<class T>
-inline __declspec(restrict)cqdetail::producer_buffer<T>* const concurrent_queue<T>::create_producer_buffer(const std::size_t withSize) const
+inline __declspec(restrict)cqdetail::producer_buffer<T>* concurrent_queue<T>::create_producer_buffer(std::size_t withSize) const
 {
-	const std::size_t size(log2_align(withSize, Buffer_Capacity_Max));
+	const std::size_t alignedSize(log2_align(withSize, Buffer_Capacity_Max));
 
 	const std::size_t bufferSize(sizeof(cqdetail::producer_buffer<T>));
-	const std::size_t dataBlockSize(sizeof(cqdetail::item_container<T>) * size);
+	const std::size_t dataBlockSize(sizeof(cqdetail::item_container<T>) * alignedSize);
 	const std::size_t alignment(alignof(T));
 
 	const std::size_t totalBlockSize(bufferSize + dataBlockSize + alignment);
@@ -371,8 +371,8 @@ inline __declspec(restrict)cqdetail::producer_buffer<T>* const concurrent_queue<
 		const std::size_t alignmentOffset(alignment - (alignmentReminder ? alignmentReminder : alignment));
 		const std::size_t dataBlockOffset(bufferOffset + bufferSize + alignmentOffset);
 
-		data = new (totalBlock + dataBlockOffset) cqdetail::item_container<T>[size];
-		buffer = new(totalBlock + bufferOffset) cqdetail::producer_buffer<T>(static_cast<size_type>(size), data);
+		data = new (totalBlock + dataBlockOffset) cqdetail::item_container<T>[alignedSize];
+		buffer = new(totalBlock + bufferOffset) cqdetail::producer_buffer<T>(static_cast<size_type>(alignedSize), data);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
@@ -387,7 +387,7 @@ inline __declspec(restrict)cqdetail::producer_buffer<T>* const concurrent_queue<
 // array, capacity and producer count as is necessary. In the event a new producer array 
 // needs to be allocated, threads will compete to do so.
 template<class T>
-inline void concurrent_queue<T>::push_producer_buffer(cqdetail::producer_buffer<T>* const buffer)
+inline void concurrent_queue<T>::push_producer_buffer(cqdetail::producer_buffer<T>* buffer)
 {
 	const uint16_t reservedSlot(claim_store_slot());
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
@@ -416,7 +416,7 @@ inline void concurrent_queue<T>::push_producer_buffer(cqdetail::producer_buffer<
 // Allocate a buffer array of capacity appropriate to the slot
 // and attempt to swap the current value for the new one
 template<class T>
-inline void concurrent_queue<T>::try_alloc_produer_store_slot(const uint8_t storeArraySlot)
+inline void concurrent_queue<T>::try_alloc_produer_store_slot(uint8_t storeArraySlot)
 {
 	const uint16_t producerCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(storeArraySlot + 1))));
 
@@ -431,7 +431,7 @@ inline void concurrent_queue<T>::try_alloc_produer_store_slot(const uint8_t stor
 // Try swapping the current producer array for one from the store, and follow up
 // with an attempt to swap the capacity value for the one corresponding to the slot
 template<class T>
-inline void concurrent_queue<T>::try_swap_producer_array(const uint8_t fromStoreArraySlot)
+inline void concurrent_queue<T>::try_swap_producer_array(uint8_t fromStoreArraySlot)
 {
 	const uint16_t targetCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(fromStoreArraySlot + 1))));
 	for (cqdetail::producer_buffer<T>** expectedProducerArray(myProducerSlots.load(std::memory_order_acquire));; expectedProducerArray = myProducerSlots.load(std::memory_order_acquire)) {
@@ -467,7 +467,7 @@ inline void concurrent_queue<T>::try_swap_producer_array(const uint8_t fromStore
 // Attempt to swap the producer count value for the arg value if the
 // existing one is lower
 template<class T>
-inline void concurrent_queue<T>::try_swap_producer_count(const uint16_t toValue)
+inline void concurrent_queue<T>::try_swap_producer_count(uint16_t toValue)
 {
 	const uint16_t desired(toValue);
 	for (uint16_t i = myProducerCount.load(std::memory_order_acquire); i < desired; i = myProducerCount.load(std::memory_order_acquire)) {
@@ -479,7 +479,7 @@ inline void concurrent_queue<T>::try_swap_producer_count(const uint16_t toValue)
 	}
 }
 template<class T>
-inline const uint16_t concurrent_queue<T>::claim_store_slot()
+inline uint16_t concurrent_queue<T>::claim_store_slot()
 {
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	const uint16_t preIteration(myProducerSlotPreIterator.fetch_add(1, std::memory_order_acq_rel));
@@ -506,7 +506,7 @@ inline const uint16_t concurrent_queue<T>::claim_store_slot()
 #endif
 }
 template<class T>
-inline cqdetail::producer_buffer<T>* const concurrent_queue<T>::fetch_from_store(const uint16_t storeSlot) const
+inline cqdetail::producer_buffer<T>* concurrent_queue<T>::fetch_from_store(uint16_t storeSlot) const
 {
 	for (uint8_t i = Producer_Slots_Max_Growth_Count - 1; i < Producer_Slots_Max_Growth_Count; --i) {
 		cqdetail::producer_buffer<T>** const producerArray(myProducerArrayStore[i]);
@@ -522,7 +522,7 @@ inline cqdetail::producer_buffer<T>* const concurrent_queue<T>::fetch_from_store
 	return nullptr;
 }
 template<class T>
-inline void concurrent_queue<T>::insert_to_store(cqdetail::producer_buffer<T>* const buffer, const uint16_t storeSlot)
+inline void concurrent_queue<T>::insert_to_store(cqdetail::producer_buffer<T>* buffer, uint16_t storeSlot)
 {
 	for (uint8_t i = Producer_Slots_Max_Growth_Count - 1; i < Producer_Slots_Max_Growth_Count; --i) {
 		cqdetail::producer_buffer<T>** const producerArray(myProducerArrayStore[i].load(std::memory_order_acquire));
@@ -534,14 +534,14 @@ inline void concurrent_queue<T>::insert_to_store(cqdetail::producer_buffer<T>* c
 	}
 }
 template<class T>
-inline const uint8_t concurrent_queue<T>::to_store_array_slot(const uint16_t storeSlot) const
+inline uint8_t concurrent_queue<T>::to_store_array_slot(uint16_t storeSlot) const
 {
 	const float fSourceStoreSlot(log2f(static_cast<float>(storeSlot)));
 	const uint8_t sourceStoreSlot(static_cast<uint8_t>(fSourceStoreSlot));
 	return sourceStoreSlot;
 }
 template<class T>
-inline constexpr const typename concurrent_queue<T>::size_type concurrent_queue<T>::log2_align(const std::size_t from, const std::size_t clamp) const
+inline constexpr typename concurrent_queue<T>::size_type concurrent_queue<T>::log2_align(std::size_t from, std::size_t clamp) const
 {
 	const std::size_t from_(from < 2 ? 2 : from);
 
@@ -562,66 +562,66 @@ class producer_buffer
 public:
 	typedef typename concurrent_queue<T>::size_type size_type;
 
-	producer_buffer(const size_type aCapacity, item_container<T>* const aDataBlock);
+	producer_buffer(size_type capacity, item_container<T>* dataBlock);
 	~producer_buffer() = default;
 
 	template<class ...Arg>
-	inline const bool try_push(Arg&&... in);
-	inline const bool try_pop(T& out);
+	inline bool try_push(Arg&&... in);
+	inline bool try_pop(T& out);
 
 	// Deallocates all buffers in the list
 	inline void destroy_all();
 
-	inline const std::size_t size() const;
+	inline std::size_t size() const;
 
-	inline const size_type capacity() const;
+	inline size_type get_capacity() const;
 
 	// Makes sure that predecessors are wholly unused
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline const bool verify_as_replacement();
+	inline bool verify_as_replacement();
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline const bool verify_as_replacement();
+	inline bool verify_as_replacement();
 
 	// Searches the buffer list towards the front for
 	// the first buffer contining entries
-	inline producer_buffer<T>* const find_back();
+	inline producer_buffer<T>* find_back();
 	// Pushes a newly allocated buffer buffer to the front of the 
 	// buffer list
-	inline void push_front(producer_buffer<T>* const aNewBuffer);
+	inline void push_front(producer_buffer<T>* newBuffer);
 
 	inline void unsafe_clear();
 
 private:
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>* = nullptr>
-	inline void write_in(const size_type aSlot, U&& in);
+	inline void write_in(size_type slot, U&& in);
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>* = nullptr>
-	inline void write_in(const size_type aSlot, U&& in);
+	inline void write_in(size_type slot, U&& in);
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_ASSIGN(U)>* = nullptr>
-	inline void write_in(const size_type aSlot, const U& in);
+	inline void write_in(size_type slot, const U& in);
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_ASSIGN(U)>* = nullptr>
-	inline void write_in(const size_type aSlot, const U& in);
+	inline void write_in(size_type slot, const U& in);
 
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U)>* = nullptr>
-	inline void write_out(const size_type aSlot, U& out);
+	inline void write_out(size_type slot, U& out);
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline void write_out(const size_type aSlot, U& out);
+	inline void write_out(size_type slot, U& out);
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline void write_out(const size_type aSlot, U& out);
+	inline void write_out(size_type slot, U& out);
 
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline void post_pop_cleanup(const size_type aReadSlot);
+	inline void post_pop_cleanup(size_type readSlot);
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
-	inline void post_pop_cleanup(const size_type aReadSlot);
+	inline void post_pop_cleanup(size_type readSlot);
 
 	template <class U = T, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline void check_for_damage();
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline void check_for_damage();
 
-	inline void reintegrate_failed_entries(const size_type aFailCount);
+	inline void reintegrate_failed_entries(size_type failCount);
 
 	// Searches the buffer list towards the back for the last node
-	inline producer_buffer<T>* const find_tail();
+	inline producer_buffer<T>* find_tail();
 
 	static const size_type Buffer_Lock_Offset = concurrent_queue<T>::Buffer_Capacity_Max + concurrent_queue<T>::Max_Producers;
 
@@ -649,11 +649,11 @@ private:
 #endif
 };
 template<class T>
-inline producer_buffer<T>::producer_buffer(const size_type aCapacity, item_container<T>* const aDataBlock)
+inline producer_buffer<T>::producer_buffer(typename producer_buffer<T>::size_type capacity, item_container<T>* dataBlock)
 	: myNext(nullptr)
 	, myPrevious(nullptr)
-	, myDataBlock(aDataBlock)
-	, myCapacity(aCapacity)
+	, myDataBlock(dataBlock)
+	, myCapacity(capacity)
 	, myReadSlot(0)
 	, myPreReadIterator(0)
 	, myWriteSlot(0)
@@ -673,7 +673,7 @@ inline void producer_buffer<T>::destroy_all()
 	producer_buffer<T>* current = find_tail();
 
 	while (current) {
-		const size_type lastCapacity(current->capacity());
+		const size_type lastCapacity(current->get_capacity());
 		uint8_t* const lastBlock(reinterpret_cast<uint8_t*>(current));
 		item_container<T>* const lastDataBlock(current->myDataBlock);
 
@@ -691,7 +691,7 @@ inline void producer_buffer<T>::destroy_all()
 // a buffer with contents. Returns null upon 
 // failiure
 template<class T>
-inline producer_buffer<T>* const producer_buffer<T>::find_back()
+inline producer_buffer<T>* producer_buffer<T>::find_back()
 {
 	producer_buffer<T>* back(this);
 
@@ -716,32 +716,32 @@ inline producer_buffer<T>* const producer_buffer<T>::find_back()
 }
 
 template<class T>
-inline const std::size_t producer_buffer<T>::size() const
+inline std::size_t producer_buffer<T>::size() const
 {
-	std::size_t size(myPostWriteIterator.load(std::memory_order_relaxed));
+	std::size_t accumulatedSize(myPostWriteIterator.load(std::memory_order_relaxed));
 	const std::size_t readSlot(myReadSlot.load(std::memory_order_acquire));
-	size -= readSlot;
+	accumulatedSize -= readSlot;
 
 	if (myNext)
-		size += myNext->size();
+		accumulatedSize += myNext->size();
 
-	return size;
+	return accumulatedSize;
 }
 
 template<class T>
-inline  const typename producer_buffer<T>::size_type producer_buffer<T>::capacity() const
+inline typename producer_buffer<T>::size_type producer_buffer<T>::get_capacity() const
 {
 	return myCapacity;
 }
 template<class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline const bool producer_buffer<T>::verify_as_replacement()
+inline bool producer_buffer<T>::verify_as_replacement()
 {
 	return true;
 }
 template<class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline const bool producer_buffer<T>::verify_as_replacement()
+inline bool producer_buffer<T>::verify_as_replacement()
 {
 	producer_buffer<T>* previous(myPrevious);
 	while (previous) {
@@ -800,14 +800,14 @@ inline void producer_buffer<T>::check_for_damage()
 #endif
 }
 template<class T>
-inline void producer_buffer<T>::push_front(producer_buffer<T>* const aNewBuffer)
+inline void producer_buffer<T>::push_front(producer_buffer<T>* newBuffer)
 {
 	producer_buffer<T>* last(this);
 	while (last->myNext) {
 		last = last->myNext;
 	}
-	last->myNext = aNewBuffer;
-	aNewBuffer->myPrevious = last;
+	last->myNext = newBuffer;
+	newBuffer->myPrevious = last;
 }
 template<class T>
 inline void producer_buffer<T>::unsafe_clear()
@@ -828,7 +828,7 @@ inline void producer_buffer<T>::unsafe_clear()
 }
 template<class T>
 template<class ...Arg>
-inline const bool producer_buffer<T>::try_push(Arg && ...in)
+inline bool producer_buffer<T>::try_push(Arg && ...in)
 {
 	const size_type slotTotal(myWriteSlot++);
 	const size_type slot(slotTotal % myCapacity);
@@ -849,7 +849,7 @@ inline const bool producer_buffer<T>::try_push(Arg && ...in)
 	return true;
 }
 template<class T>
-inline const bool producer_buffer<T>::try_pop(T & out)
+inline bool producer_buffer<T>::try_pop(T & out)
 {
 	const size_type lastWritten(myPostWriteIterator.load(std::memory_order_acquire));
 	const size_type slotReserved(myPreReadIterator.fetch_add(1, std::memory_order_acq_rel) + 1);
@@ -873,16 +873,16 @@ inline const bool producer_buffer<T>::try_pop(T & out)
 }
 template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>*>
-inline void producer_buffer<T>::write_in(const size_type aSlot, U&& in)
+inline void producer_buffer<T>::write_in(typename producer_buffer<T>::size_type slot, U&& in)
 {
-	myDataBlock[aSlot].store(std::move(in));
+	myDataBlock[slot].store(std::move(in));
 }
 template <class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_MOVE(U)>*>
-inline void producer_buffer<T>::write_in(const size_type aSlot, U&& in)
+inline void producer_buffer<T>::write_in(typename producer_buffer<T>::size_type slot, U&& in)
 {
 	try {
-		myDataBlock[aSlot].store(std::move(in));
+		myDataBlock[slot].store(std::move(in));
 	}
 	catch (...) {
 		--myWriteSlot;
@@ -891,16 +891,16 @@ inline void producer_buffer<T>::write_in(const size_type aSlot, U&& in)
 }
 template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_PUSH_ASSIGN(U)>*>
-inline void producer_buffer<T>::write_in(const size_type aSlot, const U& in)
+inline void producer_buffer<T>::write_in(typename producer_buffer<T>::size_type slot, const U& in)
 {
-	myDataBlock[aSlot].store(in);
+	myDataBlock[slot].store(in);
 }
 template <class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_PUSH_ASSIGN(U)>*>
-inline void producer_buffer<T>::write_in(const size_type aSlot, const U& in)
+inline void producer_buffer<T>::write_in(typename producer_buffer<T>::size_type slot, const U& in)
 {
 	try {
-		myDataBlock[aSlot].store(in);
+		myDataBlock[slot].store(in);
 	}
 	catch (...) {
 		--myWriteSlot;
@@ -909,24 +909,24 @@ inline void producer_buffer<T>::write_in(const size_type aSlot, const U& in)
 }
 template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U)>*>
-inline void producer_buffer<T>::write_out(const size_type aSlot, U& out)
+inline void producer_buffer<T>::write_out(typename producer_buffer<T>::size_type slot, U& out)
 {
-	myDataBlock[aSlot].move(out);
+	myDataBlock[slot].move(out);
 }
 template<class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline void producer_buffer<T>::post_pop_cleanup(const size_type aReadSlot)
+inline void producer_buffer<T>::post_pop_cleanup(typename producer_buffer<T>::size_type readSlot)
 {
-	myDataBlock[aReadSlot].set_state(item_state::Empty);
+	myDataBlock[readSlot].set_state(item_state::Empty);
 	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline void producer_buffer<T>::post_pop_cleanup(const size_type aReadSlot)
+inline void producer_buffer<T>::post_pop_cleanup(typename producer_buffer<T>::size_type readSlot)
 {
-	myDataBlock[aReadSlot].set_state(item_state::Empty);
+	myDataBlock[readSlot].set_state(item_state::Empty);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	myDataBlock[aReadSlot].reset_ref();
+	myDataBlock[readSlot].reset_ref();
 	myPostReadIterator.fetch_add(1, std::memory_order_release);
 #else
 	std::atomic_thread_fence(std::memory_order_release);
@@ -934,32 +934,32 @@ inline void producer_buffer<T>::post_pop_cleanup(const size_type aReadSlot)
 }
 template <class T>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline void producer_buffer<T>::write_out(const size_type aSlot, U& out)
+inline void producer_buffer<T>::write_out(typename producer_buffer<T>::size_type slot, U& out)
 {
-	myDataBlock[aSlot].assign(out);
+	myDataBlock[slot].assign(out);
 }
 template <class T>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
-inline void producer_buffer<T>::write_out(const size_type aSlot, U& out)
+inline void producer_buffer<T>::write_out(typename producer_buffer<T>::size_type slot, U& out)
 {
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	try {
 #endif
-		myDataBlock[aSlot].try_move(out);
+		myDataBlock[slot].try_move(out);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
 		if (myFailiureCount.fetch_add(1, std::memory_order_acq_rel) == myFailiureIndex.load(std::memory_order_acquire)) {
 			myPreReadIterator.fetch_add(Buffer_Lock_Offset, std::memory_order_release);
 		}
-		myDataBlock[aSlot].set_state(item_state::Failed);
+		myDataBlock[slot].set_state(item_state::Failed);
 		myPostReadIterator.fetch_add(1, std::memory_order_release);
 		throw;
 	}
 #endif
 }
 template<class T>
-inline void producer_buffer<T>::reintegrate_failed_entries(const size_type aFailCount)
+inline void producer_buffer<T>::reintegrate_failed_entries(typename producer_buffer<T>::size_type failCount)
 {
 	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
@@ -967,7 +967,7 @@ inline void producer_buffer<T>::reintegrate_failed_entries(const size_type aFail
 	const size_type startIndex(readSlotTotalOffset - 1);
 
 	size_type numRedirected(0);
-	for (size_type i = 0, j = startIndex; numRedirected != aFailCount; ++i, --j) {
+	for (size_type i = 0, j = startIndex; numRedirected != failCount; ++i, --j) {
 		const size_type currentIndex((startIndex - i) % myCapacity);
 		item_container<T>& currentItem(myDataBlock[currentIndex]);
 		const item_state currentState(currentItem.get_state_local());
@@ -983,7 +983,7 @@ inline void producer_buffer<T>::reintegrate_failed_entries(const size_type aFail
 	}
 }
 template<class T>
-inline producer_buffer<T>* const producer_buffer<T>::find_tail()
+inline producer_buffer<T>* producer_buffer<T>::find_tail()
 {
 	producer_buffer<T>* tail(this);
 	while (tail->myPrevious) {
@@ -1016,9 +1016,9 @@ public:
 	inline void assign(T& out);
 	inline void move(T& out);
 
-	inline const item_state get_state_local() const;
-	inline void set_state(const item_state state);
-	inline void set_state_local(const item_state state);
+	inline item_state get_state_local() const;
+	inline void set_state(item_state state);
+	inline void set_state_local(item_state state);
 
 	inline void reset_ref();
 
@@ -1085,7 +1085,7 @@ inline void item_container<T>::move(T & out)
 #endif
 }
 template<class T>
-inline void item_container<T>::set_state(const item_state state)
+inline void item_container<T>::set_state(item_state state)
 {
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	reference().myState = state;
@@ -1094,7 +1094,7 @@ inline void item_container<T>::set_state(const item_state state)
 #endif
 }
 template<class T>
-inline void item_container<T>::set_state_local(const item_state state)
+inline void item_container<T>::set_state_local(item_state state)
 {
 	myState = state;
 }
@@ -1104,7 +1104,7 @@ inline void item_container<T>::reset_ref()
 	myReference = this;
 }
 template<class T>
-inline const item_state item_container<T>::get_state_local() const
+inline item_state item_container<T>::get_state_local() const
 {
 	return myState;
 }
