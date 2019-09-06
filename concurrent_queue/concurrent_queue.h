@@ -138,6 +138,9 @@ private:
 	// Maximum number of times the producer slot array can grow
 	static constexpr uint8_t Producer_Slots_Max_Growth_Count = 15;
 
+	// After this many pops, a consumer is forced to relocate
+	static constexpr uint16_t Consumer_Force_Relocation_Pop_Count = 16;
+
 	static std::atomic<size_type> ourObjectIterator;
 
 	const size_type myInitBufferCapacity;
@@ -147,6 +150,8 @@ private:
 	static thread_local std::vector<cqdetail::producer_buffer<T>*> ourConsumers;
 
 	static thread_local uint16_t ourRelocationIndex;
+	static thread_local uint16_t ourPopCount;
+
 
 	static cqdetail::producer_buffer<T> ourDummyBuffer;
 
@@ -176,6 +181,8 @@ template <class T>
 thread_local uint16_t concurrent_queue<T>::ourRelocationIndex(static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()));
 template <class T>
 cqdetail::producer_buffer<T> concurrent_queue<T>::ourDummyBuffer(0, nullptr);
+template <class T>
+thread_local uint16_t concurrent_queue<T>::ourPopCount(0);
 
 template<class T>
 inline concurrent_queue<T>::concurrent_queue()
@@ -263,6 +270,11 @@ bool concurrent_queue<T>::try_pop(T & out)
 
 		buffer = ourConsumers[consumerSlot];
 	}
+
+	if (Consumer_Force_Relocation_Pop_Count < ++ourPopCount){
+		relocate_consumer();
+	}
+
 	return true;
 }
 template<class T>
@@ -326,8 +338,8 @@ inline void concurrent_queue<T>::init_producer(typename concurrent_queue<T>::siz
 template<class T>
 inline bool concurrent_queue<T>::relocate_consumer()
 {
-	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
-	const uint16_t relocation(ourRelocationIndex--);
+	const uint16_t producers(myProducerCount.load(std::memory_order_relaxed));
+	const uint16_t relocation(ourRelocationIndex++);
 
 	for (uint16_t i = 0, j = relocation; i < producers; ++i, ++j) {
 		const uint16_t entry(j % producers);
@@ -340,6 +352,9 @@ inline bool concurrent_queue<T>::relocate_consumer()
 					myProducerSlots[entry] = buffer;
 				}
 			}
+
+			ourPopCount = 0;
+
 			return true;
 		}
 	}
