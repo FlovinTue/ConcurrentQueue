@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?> 
+<?xml version="1.0" encoding="utf-8"?>
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
   <Type Name="gdul::concurrent_queue&lt;*&gt;">
@@ -11,29 +11,47 @@
       </ArrayItems>
     </Expand>
   </Type>
-  <Type Name="gdul::producer_buffer&lt;*&gt;">
-    <DisplayString>
-      {{size = {myPostWriteIterator._My_val - myReadSlot._My_val}}}</DisplayString>
+  <Type Name="gdul::cqdetail::producer_buffer&lt;*&gt;">
+   
     <Expand>
-      <Item Name="[size]">
-        myPostWriteIterator._My_val - myReadSlot._My_val
-      </Item>
-      <Item Name="[capacity]">myCapacity</Item>
-      <Item Name="[next]">myNext</Item>
-      <ArrayItems>
-        <Size>myPostWriteIterator._My_val - myReadSlot._My_val</Size>
-        <ValuePointer>myDataBlock + (myReadSlot._My_val - ((myReadSlot._My_val / myCapacity) * myCapacity))</ValuePointer>
-      </ArrayItems>
+      <CustomListItems MaxItemsPerView="5000">
+        <Variable Name="pBuffer" InitialValue="this" />
+        <Variable Name="itemCount" InitialValue="0"/>
+        <Variable Name="pItem" InitialValue="myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))"/>
+        <Variable Name="sizeAccumulator" InitialValue="0"/>
+
+        <Loop>
+            <Exec>sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)</Exec>
+            <Break Condition="pBuffer->myNext == nullptr" />
+            <Exec>pBuffer = pBuffer->myNext</Exec>
+        </Loop>
+ 
+        <Item Name="[size]">sizeAccumulator</Item>
+        
+        <Exec>pBuffer = this</Exec>
+        
+        <Loop>
+          <If Condition="itemCount == (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+            <Break Condition="pBuffer->myNext == nullptr" />
+            <Exec>pBuffer = pBuffer->myNext</Exec>
+            <Exec>pItem = pBuffer->myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))</Exec>
+            <Exec>itemCount = 0</Exec>
+          </If>
+          <Item>*pItem</Item>
+          <Exec>++pItem</Exec>
+          <If Condition="pItem == (pBuffer->myDataBlock + pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+            <Exec>pItem= pBuffer->myDataBlock</Exec>
+          </If>
+          <Exec>++itemCount</Exec>
+        </Loop>
+      </CustomListItems>
     </Expand>
   </Type>
-  <Type Name="gdul::item_container&lt;*&gt;">
-    <DisplayString>{{item = {myData}}}</DisplayString>
-    <Expand>
-      <Item Name="[item]">myData</Item>
-    </Expand>
+  <Type Name="gdul::cqdetail::item_container&lt;*&gt;">
+    <DisplayString>{myData}</DisplayString>
   </Type>
-  
-  
+
+
 </AutoVisualizer>
 
 

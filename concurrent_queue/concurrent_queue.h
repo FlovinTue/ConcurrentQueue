@@ -31,7 +31,7 @@
 // Exception handling may be enabled for basic exception safety at the cost of 
 // a slight performance decrease
 
-/*#define CQ_ENABLE_EXCEPTIONHANDLING */
+/*#define CQ_ENABLE_EXCEPTIONHANDLING*/
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING 
 #define CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -300,7 +300,7 @@ inline void concurrent_queue<T>::reserve(typename concurrent_queue<T>::size_type
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 		}
 		catch (...) {
-			newBuffer->destroy_all();
+			buffer->destroy_all();
 			throw;
 	}
 #endif
