@@ -77,7 +77,7 @@ class producer_buffer;
 template <class T>
 class item_container;
 
-enum class item_state : int8_t;
+enum class item_state : uint8_t;
 
 }
 // The WizardLoaf concurrent_queue 
@@ -138,7 +138,7 @@ private:
 	// Maximum number of times the producer slot array can grow
 	static constexpr uint8_t Producer_Slots_Max_Growth_Count = 15;
 
-	// After this many pops, a consumer is forced to relocate
+	// The maximum allowed consumption per producer per visit
 	static constexpr uint16_t Consumer_Force_Relocation_Pop_Count = 16;
 
 	static std::atomic<size_type> ourObjectIterator;
@@ -292,7 +292,18 @@ inline void concurrent_queue<T>::reserve(typename concurrent_queue<T>::size_type
 	if (ourProducers[producerSlot]->get_capacity() < capacity) {
 		const size_type alignedCapacity(log2_align(capacity, Buffer_Capacity_Max));
 		cqdetail::producer_buffer<T>* const buffer(create_producer_buffer(alignedCapacity));
-		ourProducers[producerSlot]->push_front(buffer);
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+		try {
+
+#endif
+			ourProducers[producerSlot]->push_front(buffer);
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+		}
+		catch (...) {
+			newBuffer->destroy_all();
+			throw;
+	}
+#endif
 		ourProducers[producerSlot] = buffer;
 	}
 }
@@ -638,7 +649,7 @@ private:
 	// Searches the buffer list towards the back for the last node
 	inline producer_buffer<T>* find_tail();
 
-	static const size_type Buffer_Lock_Offset = concurrent_queue<T>::Buffer_Capacity_Max + concurrent_queue<T>::Max_Producers;
+	static constexpr size_type Buffer_Lock_Offset = concurrent_queue<T>::Buffer_Capacity_Max + concurrent_queue<T>::Max_Producers;
 
 	size_type myWriteSlot;
 	std::atomic<size_type> myPostWriteIterator;
@@ -976,6 +987,7 @@ inline void producer_buffer<T>::write_out(typename producer_buffer<T>::size_type
 template<class T>
 inline void producer_buffer<T>::reintegrate_failed_entries(typename producer_buffer<T>::size_type failCount)
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	const size_type readSlotTotal(myReadSlot.load(std::memory_order_acquire));
 	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
 
@@ -996,6 +1008,9 @@ inline void producer_buffer<T>::reintegrate_failed_entries(typename producer_buf
 			++numRedirected;
 		}
 	}
+#else
+	failCount;
+#endif
 }
 template<class T>
 inline producer_buffer<T>* producer_buffer<T>::find_tail()
@@ -1020,9 +1035,9 @@ public:
 
 	inline void store(const T& in);
 	inline void store(T&& in);
-
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	inline void redirect(item_container<T>& to);
-
+#endif
 	template<class U = T, std::enable_if_t<std::is_move_assignable<U>::value>* = nullptr>
 	inline void try_move(U& out);
 	template<class U = T, std::enable_if_t<!std::is_move_assignable<U>::value>* = nullptr>
@@ -1039,12 +1054,14 @@ public:
 
 private:
 	// May or may not reference this continer
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	inline item_container<T>& reference() const;
 
 	// Simple bitmask that represents the pointer portion of a 64 bit integer
 	static const uint64_t ourPtrMask = (uint64_t(std::numeric_limits<uint32_t>::max()) << 16 | uint64_t(std::numeric_limits<uint16_t>::max()));
-
+#endif
 	T myData;
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	union
 	{
 		uint64_t myStateBlock;
@@ -1055,25 +1072,33 @@ private:
 			item_state myState;
 		};
 	};
+#else
+	item_state myState;
+#endif
 };
 template<class T>
 inline item_container<T>::item_container()
 	: myData()
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	, myReference(this)
+#else
+	, myState(item_state::Empty)
+#endif
 {
 }
 template<class T>
 inline void item_container<T>::store(const T & in)
 {
 	myData = in;
-	myReference = this;
+	reset_ref();
 }
 template<class T>
 inline void item_container<T>::store(T && in)
 {
 	myData = std::move(in);
-	myReference = this;
+	reset_ref();
 }
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 template<class T>
 inline void item_container<T>::redirect(item_container<T>& to)
 {
@@ -1081,6 +1106,7 @@ inline void item_container<T>::redirect(item_container<T>& to)
 	myStateBlock &= ~ourPtrMask;
 	myStateBlock |= otherPtrBlock;
 }
+#endif
 template<class T>
 inline void item_container<T>::assign(T & out)
 {
@@ -1116,18 +1142,22 @@ inline void item_container<T>::set_state_local(item_state state)
 template<class T>
 inline void item_container<T>::reset_ref()
 {
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myReference = this;
+#endif
 }
 template<class T>
 inline item_state item_container<T>::get_state_local() const
 {
 	return myState;
 }
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 template<class T>
 inline item_container<T>& item_container<T>::reference() const
 {
 	return *reinterpret_cast<item_container<T>*>(myStateBlock & ourPtrMask);
 }
+#endif
 template<class T>
 template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
 inline void item_container<T>::try_move(U& out)
@@ -1149,7 +1179,7 @@ inline void item_container<T>::try_move(U& out)
 #endif
 }
 
-enum class item_state : int8_t
+enum class item_state : uint8_t
 {
 	Empty,
 	Valid,

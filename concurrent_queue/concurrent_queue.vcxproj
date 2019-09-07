@@ -15,7 +15,7 @@
     <ProjectGuid>{A3FDEB2F-1384-4518-8E8B-AF0DEF18FE4E}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>ThreadSafeConsumptionQueue</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.14393.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.18362.0</WindowsTargetPlatformVersion>
     <ProjectName>concurrent_queue</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />

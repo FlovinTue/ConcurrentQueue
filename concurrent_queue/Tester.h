@@ -6,7 +6,7 @@
 #include "Timer.h"
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 8;
+const uint32_t Writers = 4;
 const uint32_t Readers = 4;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
@@ -106,6 +106,7 @@ inline void Tester<T>::Write()
 
 	uint32_t sum(0);
 
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	for (int j = 0; j < WritesPerThread; ) {
 		const T in(rand());
 		try {
@@ -117,12 +118,13 @@ inline void Tester<T>::Write()
 			++myThrown;
 		}
 	}
-
-	//for (int j = 0; j < WritesPerThread; ++j) {
-	//	T in(1);
-	//	myQueue.push(in);
-	//	sum += in;
-	//}
+#else
+	for (int j = 0; j < WritesPerThread; ++j) {
+		T in(1);
+		myQueue.push(in);
+		sum += in.count;
+	}
+#endif
 	myWrittenSum += sum;
 }
 
@@ -134,6 +136,7 @@ inline void Tester<T>::Read()
 	uint32_t sum(0);
 
 	T out;
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	for (int j = 0; j < ReadsPerThread;) {
 		try {
 			if (myQueue.try_pop(out)) {
@@ -146,14 +149,16 @@ inline void Tester<T>::Read()
 		}
 	}
 
-	//for (int j = 0; j < ReadsPerThread; ++j) {
-	//	while (true) {
-	//		if (myQueue.try_pop(out)) {
-	//			sum += out;
-	//			break;
-	//		}
-	//	}
-	//}
+#else
+	for (int j = 0; j < ReadsPerThread; ++j) {
+		while (true) {
+			if (myQueue.try_pop(out)) {
+				sum += out.count;
+				break;
+			}
+		}
+	}
+#endif
 	myReadSum += sum;
 }
 
