@@ -37,12 +37,14 @@
             <Exec>pItem = pBuffer->myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))</Exec>
             <Exec>itemCount = 0</Exec>
           </If>
+          <If Condition="itemCount != (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
           <Item>*pItem</Item>
           <Exec>++pItem</Exec>
           <If Condition="pItem == (pBuffer->myDataBlock + pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
             <Exec>pItem= pBuffer->myDataBlock</Exec>
           </If>
           <Exec>++itemCount</Exec>
+          </If>
         </Loop>
       </CustomListItems>
     </Expand>
