@@ -2,9 +2,25 @@
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
   <Type Name="gdul::concurrent_queue&lt;*&gt;">
-    <DisplayString>{{producer_count = {myProducerCount._My_val}}}</DisplayString>
     <Expand>
-      <Item Name="[producer_count]">myProducerCount._My_val</Item>
+  
+      <CustomListItems>
+        <Variable Name="sizeAccumulator" InitialValue="0"/>
+        <Variable Name="producerIndex" InitialValue="0"/>
+        <Variable Name="pBuffer" InitialValue="myDebugView[producerIndex]" />
+        <Loop>
+          <Break Condition="producerIndex == myProducerCount._My_val"/>
+          <Loop>
+            <Exec>sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)</Exec>
+            <Break Condition="pBuffer->myNext == nullptr" />
+            <Exec>pBuffer = pBuffer->myNext</Exec>
+          </Loop>
+          <Exec>++producerIndex</Exec>
+          <Exec>pBuffer = myDebugView[producerIndex]</Exec>
+        </Loop>
+        <Item Name="[size]">sizeAccumulator</Item>
+        <Item Name="[producer_count]">myProducerCount._My_val</Item>
+      </CustomListItems>
       <ArrayItems>
         <Size>myProducerCount._My_val</Size>
         <ValuePointer>myDebugView</ValuePointer>
@@ -14,7 +30,7 @@
   <Type Name="gdul::cqdetail::producer_buffer&lt;*&gt;">
    
     <Expand>
-      <CustomListItems MaxItemsPerView="5000">
+      <CustomListItems MaxItemsPerView="512">
         <Variable Name="pBuffer" InitialValue="this" />
         <Variable Name="itemCount" InitialValue="0"/>
         <Variable Name="pItem" InitialValue="myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))"/>
@@ -51,6 +67,9 @@
   </Type>
   <Type Name="gdul::cqdetail::item_container&lt;*&gt;">
     <DisplayString>{myData}</DisplayString>
+    <Expand>
+      <ExpandedItem>myData</ExpandedItem>
+    </Expand>
   </Type>
 
 
