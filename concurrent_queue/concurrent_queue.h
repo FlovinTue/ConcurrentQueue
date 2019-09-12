@@ -23,6 +23,7 @@
 #include <atomic>
 #include <vector>
 #include <limits>
+#include <atomic_shared_ptr.h>
 
 // In the event an exception is thrown during a pop operation, some entries may
 // be dequeued out-of-order as some consumers may already be halfway through a 
@@ -90,6 +91,8 @@ std::size_t calc_block_size(std::size_t fromCapacity);
 
 inline uint8_t to_store_array_slot(uint16_t storeSlot);
 
+constexpr std::size_t next_aligned_to(std::size_t addr, std::size_t align);
+constexpr std::size_t aligned_size(std::size_t byteSize, std::size_t align);
 
 // The maximum allowed consumption per producer per visit
 static constexpr uint16_t Consumer_Force_Relocation_Pop_Count = 16;
@@ -143,7 +146,7 @@ private:
 
 	inline bool relocate_consumer();
 
-	inline __declspec(restrict)cqdetail::producer_buffer<T>* create_producer_buffer(std::size_t withSize);
+	inline cqdetail::producer_buffer<T>* create_producer_buffer(std::size_t withSize);
 	inline void push_producer_buffer(cqdetail::producer_buffer<T>* buffer);
 	inline void try_alloc_produer_store_slot(uint8_t storeArraySlot);
 	inline void try_swap_producer_array(uint8_t aromStoreArraySlot);
@@ -380,7 +383,7 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 	return false;
 }
 template<class T, class Allocator>
-inline __declspec(restrict)cqdetail::producer_buffer<T>* concurrent_queue<T, Allocator>::create_producer_buffer(std::size_t withSize)
+inline cqdetail::producer_buffer<T>* concurrent_queue<T, Allocator>::create_producer_buffer(std::size_t withSize)
 {
 	const std::size_t alignedSize(cqdetail::log2_align(withSize, Buffer_Capacity_Max));
 
@@ -577,7 +580,7 @@ public:
 	typedef typename concurrent_queue<T>::size_type size_type;
 
 	producer_buffer(size_type capacity, item_container<T>* dataBlock);
-	~producer_buffer() = default;
+	~producer_buffer();
 
 	template<class ...Arg>
 	inline bool try_push(Arg&&... in);
@@ -687,6 +690,14 @@ inline producer_buffer<T>::producer_buffer(typename producer_buffer<T>::size_typ
 }
 
 template<class T>
+inline producer_buffer<T>::~producer_buffer()
+{
+	for (size_type i = 0; i < myCapacity; ++i){
+		 myDataBlock[i].~item_container<T>();
+	}
+}
+
+template<class T>
 template <class Allocator>
 inline void producer_buffer<T>::destroy_all(Allocator allocator)
 {
@@ -706,10 +717,6 @@ inline void producer_buffer<T>::destroy_all(Allocator allocator)
 		allocator.deallocate(lastBlock, calc_block_size<T>(lastCapacity));
 	}
 }
-
-// Searches buffer list towards the front for
-// a buffer with contents. Returns null upon 
-// failiure
 template<class T>
 inline producer_buffer<T>* producer_buffer<T>::find_back()
 {
@@ -1210,6 +1217,22 @@ inline uint8_t to_store_array_slot(uint16_t storeSlot)
 	const float fSourceStoreSlot(log2f(static_cast<float>(storeSlot)));
 	const uint8_t sourceStoreSlot(static_cast<uint8_t>(fSourceStoreSlot));
 	return sourceStoreSlot;
+}
+constexpr std::size_t next_aligned_to(std::size_t addr, std::size_t align)
+{
+	const std::size_t mod(addr % align);
+	const std::size_t remainder(align - mod);
+	const std::size_t offset(remainder == align ? 0 : remainder);
+
+	return addr + offset;
+}
+constexpr std::size_t aligned_size(std::size_t byteSize, std::size_t align)
+{
+	const std::size_t div(byteSize / align);
+	const std::size_t mod(byteSize % align);
+	const std::size_t total(div + static_cast<std::size_t>(static_cast<bool>(mod)));
+
+	return align * total;
 }
 template <class T>
 struct consumer_wrapper
