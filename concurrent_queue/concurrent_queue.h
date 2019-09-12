@@ -52,10 +52,12 @@
 #endif
 
 #define CQ_PADDING(bytes) const uint8_t MAKE_UNIQUE_NAME(trash)[bytes] {}
+#define CQ_CACHELINE_SIZE 64u
 
-// For anonymous struct
-#pragma warning(push)
+// For anonymous struct and alignas(64) 
+#pragma warning(push, 2)
 #pragma warning(disable : 4201) 
+#pragma warning(disable : 4324) 
 
 #undef min
 #undef max
@@ -96,11 +98,11 @@ static constexpr uint8_t Producer_Slots_Max_Growth_Count = 15;
 
 static constexpr uint16_t Max_Producers = std::numeric_limits<int16_t>::max() - 1;
 }
-// The WizardLoaf concurrent_queue 
-// Made for the x86/x64 architecture in Visual Studio 2017, focusing
-// on performance. The Queue preserves the FIFO property within the 
-// context of single producers. Push operations are wait-free, TryPop & Size 
-// are lock-free and producer capacities grows dynamically
+// The WizardLoaf MPMC unbounded concurrent_queue.
+// FIFO is respected within the context of single producers. push operations are wait-free
+// (assuming pre-allocated memory using reserve() alt. a wait-free allocator), try_pop & 
+// size are lock-free. Basic exception safety may be enabled via define CQ_ENABLE_EXCEPTIONHANDLING 
+// at the price of a slight performance decrease.
 template <class T, class Allocator = std::allocator<uint8_t>>
 class concurrent_queue
 {
@@ -124,8 +126,7 @@ public:
 
 	void unsafe_clear();
 
-	// The Size method can be considered an approximation, and may be 
-	// innacurate at the time the caller receives the result.
+	// size hint
 	inline size_type size() const;
 
 	// Not quite size_type max because we need some leaway in case we
@@ -157,8 +158,8 @@ private:
 	const size_type myInitBufferCapacity;
 	const size_type myObjectId;
 
-	static thread_local std::vector<cqdetail::producer_buffer<T>*> ourProducers;
-	static thread_local std::vector<cqdetail::consumer_wrapper<T>> ourConsumers;
+	static thread_local std::vector<cqdetail::producer_buffer<T>*, allocator_type> ourProducers;
+	static thread_local std::vector<cqdetail::consumer_wrapper<T>, allocator_type> ourConsumers;
 
 	static cqdetail::producer_buffer<T> ourDummyBuffer;
 
@@ -178,14 +179,6 @@ private:
 #endif
 	allocator_type myAllocator;
 };
-template <class T, class Allocator>
-std::atomic<typename concurrent_queue<T, Allocator>::size_type> concurrent_queue<T, Allocator>::ourObjectIterator(0);
-template <class T, class Allocator>
-thread_local std::vector<cqdetail::producer_buffer<T>*> concurrent_queue<T, Allocator>::ourProducers;
-template <class T, class Allocator>
-thread_local std::vector<cqdetail::consumer_wrapper<T>> concurrent_queue<T, Allocator>::ourConsumers;
-template <class T, class Allocator>
-cqdetail::producer_buffer<T> concurrent_queue<T, Allocator>::ourDummyBuffer(0, nullptr);
 
 template<class T, class Allocator>
 inline concurrent_queue<T, Allocator>::concurrent_queue()
@@ -272,7 +265,7 @@ bool concurrent_queue<T, Allocator>::try_pop(T & out)
 {
 	const size_type consumerSlot(myObjectId);
 	if (!(consumerSlot < ourConsumers.size()))
-		ourConsumers.resize(consumerSlot + 1, cqdetail::consumer_wrapper<T>{ &ourDummyBuffer/*, 0 , (static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()))*/});
+		ourConsumers.resize(consumerSlot + 1, cqdetail::consumer_wrapper<T>{ &ourDummyBuffer, 0 , (static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()))});
 
 	cqdetail::producer_buffer<T>* buffer = ourConsumers[consumerSlot].myPtr;
 
@@ -578,7 +571,7 @@ inline void concurrent_queue<T, Allocator>::insert_to_store(cqdetail::producer_b
 namespace cqdetail {
 
 template <class T>
-class producer_buffer
+class alignas(CQ_CACHELINE_SIZE) producer_buffer
 {
 public:
 	typedef typename concurrent_queue<T>::size_type size_type;
@@ -647,29 +640,33 @@ private:
 
 	static constexpr size_type Buffer_Lock_Offset = concurrent_queue<T>::Buffer_Capacity_Max + Max_Producers;
 
+	std::atomic<size_type> myPreReadIterator;
+	std::atomic<size_type> myReadSlot;
+
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	std::atomic<size_type> myPostReadIterator;
+	std::atomic<uint16_t> myFailiureCount;
+	std::atomic<uint16_t> myFailiureIndex;
+	bool myValidFlag;
+	CQ_PADDING((CQ_CACHELINE_SIZE * 2) - ((sizeof(size_type) * 3) + (sizeof(uint16_t) * 2) + sizeof(bool)));
+
+#else
+	CQ_PADDING((CQ_CACHELINE_SIZE * 2) - sizeof(size_type) * 2);
+#endif
+
 	size_type myWriteSlot;
 	std::atomic<size_type> myPostWriteIterator;
 
-	// The tail becomes the de-facto storage place for unused buffers,
-	// until they are destroyed with the entire structure
+	CQ_PADDING(CQ_CACHELINE_SIZE);
+
 	producer_buffer<T>* myPrevious;
 	producer_buffer<T>* myNext;
 
 	const size_type myCapacity;
-	item_container<T>* const myDataBlock;
-	CQ_PADDING(128 - sizeof(void*));
-	std::atomic<size_type> myReadSlot;
-	CQ_PADDING(64 - sizeof(size_type));
-	std::atomic<size_type> myPreReadIterator;
 
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	std::atomic<uint16_t> myFailiureCount;
-	std::atomic<uint16_t> myFailiureIndex;
-	bool myValidFlag;
-	CQ_PADDING(64 - 5);
-	std::atomic<size_type> myPostReadIterator;
-#endif
+	item_container<T>* const myDataBlock;
 };
+
 template<class T>
 inline producer_buffer<T>::producer_buffer(typename producer_buffer<T>::size_type capacity, item_container<T>* dataBlock)
 	: myNext(nullptr)
@@ -741,8 +738,8 @@ inline producer_buffer<T>* producer_buffer<T>::find_back()
 template<class T>
 inline typename producer_buffer<T>::size_type producer_buffer<T>::size() const
 {
-	size_type accumulatedSize(myPostWriteIterator.load(std::memory_order_relaxed));
 	const size_type readSlot(myReadSlot.load(std::memory_order_acquire));
+	size_type accumulatedSize(myPostWriteIterator.load(std::memory_order_relaxed));
 	accumulatedSize -= readSlot;
 
 	if (myNext)
@@ -1222,5 +1219,13 @@ struct consumer_wrapper
 	uint16_t myRelocationIndex;
 };
 }
+template <class T, class Allocator>
+std::atomic<typename concurrent_queue<T, Allocator>::size_type> concurrent_queue<T, Allocator>::ourObjectIterator(0);
+template <class T, class Allocator>
+thread_local std::vector<cqdetail::producer_buffer<T>*, Allocator> concurrent_queue<T, Allocator>::ourProducers(4, nullptr);
+template <class T, class Allocator>
+thread_local std::vector<cqdetail::consumer_wrapper<T>, Allocator> concurrent_queue<T, Allocator>::ourConsumers(4, {&concurrent_queue<T, Allocator>::ourDummyBuffer, 0, (static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()))});
+template <class T, class Allocator>
+cqdetail::producer_buffer<T> concurrent_queue<T, Allocator>::ourDummyBuffer(0, nullptr);
 }
 #pragma warning(pop)
