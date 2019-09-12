@@ -5,8 +5,6 @@ VisualStudioVersion = 15.0.27428.2043
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "concurrent_queue", "concurrent_queue\concurrent_queue.vcxproj", "{A3FDEB2F-1384-4518-8E8B-AF0DEF18FE4E}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "atomic_shared_ptr", "..\atomic_shared_ptr\atomic_shared_ptr\atomic_shared_ptr.vcxproj", "{F2B36960-1C2E-402A-91BE-CD8C1539E38B}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,12 +19,6 @@ Global
 		{A3FDEB2F-1384-4518-8E8B-AF0DEF18FE4E}.Release|x64.ActiveCfg = Release|x64
 		{A3FDEB2F-1384-4518-8E8B-AF0DEF18FE4E}.Release|x64.Build.0 = Release|x64
 		{A3FDEB2F-1384-4518-8E8B-AF0DEF18FE4E}.Release|x86.ActiveCfg = Release|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Debug|x64.ActiveCfg = Debug|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Debug|x64.Build.0 = Debug|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Debug|x86.ActiveCfg = Debug|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Release|x64.ActiveCfg = Release|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Release|x64.Build.0 = Release|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Release|x86.ActiveCfg = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
