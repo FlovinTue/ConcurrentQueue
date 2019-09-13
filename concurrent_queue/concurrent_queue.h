@@ -144,6 +144,7 @@ private:
 
 	typedef cqdetail::shared_ptr_allocator_adaptor<uint8_t, Allocator> allocator_adapter_type;
 	typedef shared_ptr<cqdetail::producer_buffer<T, Allocator>, allocator_adapter_type> shared_ptr_type;
+	typedef atomic_shared_ptr<cqdetail::producer_buffer<T, Allocator>, allocator_adapter_type> atomic_shared_ptr_type;
 
 	template <class ...Arg>
 	void push_internal(Arg&&... in);
@@ -172,11 +173,11 @@ private:
 
 	static shared_ptr_type ourDummyBuffer;
 
-	std::atomic<shared_ptr_type*> myProducerArrayStore[cqdetail::Producer_Slots_Max_Growth_Count];
+	std::atomic<atomic_shared_ptr_type*> myProducerArrayStore[cqdetail::Producer_Slots_Max_Growth_Count];
 
 	union
 	{
-		std::atomic<shared_ptr_type*> myProducerSlots;
+		std::atomic<atomic_shared_ptr_type*> myProducerSlots;
 		shared_ptr_type* myDebugView;
 	};
 	allocator_type myAllocator;
@@ -227,17 +228,18 @@ inline concurrent_queue<T, Allocator>::concurrent_queue(size_type initProducerCa
 template<class T, class Allocator>
 inline concurrent_queue<T, Allocator>::~concurrent_queue()
 {
-	//const uint16_t producerCount(myProducerCount.load(std::memory_order_acquire));
+	std::atomic_thread_fence(std::memory_order_acquire);
 
-	//for (uint16_t i = 0; i < producerCount; ++i) {
-	//	if (myProducerSlots[i] == &ourDummyBuffer)
-	//		continue;
-	//	myProducerSlots[i]->destroy_all(myAllocator);
-	//}
-	//for (uint16_t i = 0; i < cqdetail::Producer_Slots_Max_Growth_Count; ++i) {
-	//	delete[] myProducerArrayStore[i];
-	//}
-	//memset(&myProducerArrayStore[0], 0, sizeof(std::atomic<cqdetail::producer_buffer<T, Allocator>**>) * cqdetail::Producer_Slots_Max_Growth_Count);
+	const uint16_t producerCount(myProducerCount.load(std::memory_order_relaxed));
+	for (uint16_t i = 0; i < producerCount; ++i) {
+		myProducerSlots[i].unsafe_store(nullptr);
+	}
+	uint16_t slots(cqdetail::to_store_array_slot(producerCount) + 1);
+	for (uint16_t i = 0; i < slots; ++i) {
+		const uint16_t slotSize(static_cast<uint16_t>(std::pow(2, i + 1) * sizeof(atomic_shared_ptr_type)));
+		uint8_t* const block(reinterpret_cast<uint8_t*>(myProducerArrayStore[i].load(std::memory_order_relaxed)));
+		myAllocator.deallocate(block, slotSize);
+	}
 }
 
 template<class T, class Allocator>
@@ -491,16 +493,20 @@ inline void concurrent_queue<T, Allocator>::try_alloc_produer_store_slot(uint8_t
 {
 	const uint16_t producerCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(storeArraySlot + 1))));
 
-	const std::size_t blockSize(sizeof(shared_ptr_type) * producerCapacity);
+	const std::size_t blockSize(sizeof(atomic_shared_ptr_type) * producerCapacity);
 	uint8_t* const block(myAllocator.allocate(blockSize));
 
-	shared_ptr_type* const newProducerSlotBlock = new (block) shared_ptr_type[producerCapacity];
+	atomic_shared_ptr_type* const newProducerSlotBlock(reinterpret_cast<atomic_shared_ptr_type*>(block));
 
-	shared_ptr_type* expected(nullptr);
+	for (std::size_t i = 0; i < producerCapacity; ++i) {
+		atomic_shared_ptr_type* const item(&newProducerSlotBlock[i]);
+		new (item) (atomic_shared_ptr_type);
+	}
+	atomic_shared_ptr_type* expected(nullptr);
 	if (!myProducerArrayStore[storeArraySlot].compare_exchange_strong(expected, newProducerSlotBlock, std::memory_order_acq_rel, std::memory_order_acquire)) {
 
 		for (std::size_t i = 0; i < producerCapacity; ++i){
-			newProducerSlotBlock[i].~shared_ptr_type();
+			newProducerSlotBlock[i].~atomic_shared_ptr_type();
 		}
 		myAllocator.deallocate(block, blockSize);
 	}
@@ -511,7 +517,7 @@ template<class T, class Allocator>
 inline void concurrent_queue<T, Allocator>::try_swap_producer_array(uint8_t fromStoreArraySlot)
 {
 	const uint16_t targetCapacity(static_cast<uint16_t>(powf(2.f, static_cast<float>(fromStoreArraySlot + 1))));
-	for (shared_ptr_type* expectedProducerArray(myProducerSlots.load(std::memory_order_acquire));; expectedProducerArray = myProducerSlots.load(std::memory_order_acquire)) {
+	for (atomic_shared_ptr_type* expectedProducerArray(myProducerSlots.load(std::memory_order_acquire));; expectedProducerArray = myProducerSlots.load(std::memory_order_acquire)) {
 
 		bool superceeded(false);
 		for (uint8_t i = fromStoreArraySlot + 1; i < cqdetail::Producer_Slots_Max_Growth_Count; ++i) {
@@ -525,7 +531,7 @@ inline void concurrent_queue<T, Allocator>::try_swap_producer_array(uint8_t from
 		if (superceeded) {
 			break;
 		}
-		shared_ptr_type* const desiredProducerArray(myProducerArrayStore[fromStoreArraySlot].load(std::memory_order_acquire));
+		atomic_shared_ptr_type* const desiredProducerArray(myProducerArrayStore[fromStoreArraySlot].load(std::memory_order_acquire));
 		if (myProducerSlots.compare_exchange_strong(expectedProducerArray, desiredProducerArray, std::memory_order_acq_rel, std::memory_order_acquire)) {
 
 			for (uint16_t expectedCapacity(myProducerCapacity.load(std::memory_order_acquire));; expectedCapacity = myProducerCapacity.load(std::memory_order_acquire)) {
@@ -586,11 +592,11 @@ template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue<T, Allocator>::fetch_from_store(uint16_t storeSlot) const
 {
 	for (uint8_t i = cqdetail::Producer_Slots_Max_Growth_Count - 1; i < cqdetail::Producer_Slots_Max_Growth_Count; --i) {
-		shared_ptr_type* const producerArray(myProducerArrayStore[i].load(std::memory_order_acquire));
+		atomic_shared_ptr_type* const producerArray(myProducerArrayStore[i].load(std::memory_order_acquire));
 		if (!producerArray) {
 			continue;
 		}
-		shared_ptr_type const producerBuffer(producerArray[storeSlot]);
+		shared_ptr_type producerBuffer(producerArray[storeSlot].load());
 		if (!producerBuffer) {
 			continue;
 		}
@@ -602,11 +608,11 @@ template<class T, class Allocator>
 inline void concurrent_queue<T, Allocator>::insert_to_store(shared_ptr_type buffer, uint16_t storeSlot)
 {
 	for (uint8_t i = cqdetail::Producer_Slots_Max_Growth_Count - 1; i < cqdetail::Producer_Slots_Max_Growth_Count; --i) {
-		shared_ptr_type* const producerArray(myProducerArrayStore[i].load(std::memory_order_acquire));
+		atomic_shared_ptr_type* const producerArray(myProducerArrayStore[i].load(std::memory_order_acquire));
 		if (!producerArray) {
 			continue;
 		}
-		producerArray[storeSlot] = std::move(buffer);
+		producerArray[storeSlot].store(std::move(buffer));
 		break;
 	}
 }
