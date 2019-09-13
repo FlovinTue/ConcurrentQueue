@@ -97,13 +97,6 @@ constexpr std::size_t aligned_size(std::size_t byteSize, std::size_t align);
 template <class T, class Allocator>
 class shared_ptr_allocator_adaptor;
 
-template <class T, class Allocator>
-struct shared_ptr_type_wrapper
-{
-	typedef shared_ptr_allocator_adaptor<uint8_t, Allocator> allocator_adapter_type;
-	typedef shared_ptr<producer_buffer<T, Allocator>, allocator_adapter_type> shared_ptr_type;
-};
-
 // The maximum allowed consumption from a producer per visit
 static constexpr uint16_t Consumer_Force_Relocation_Pop_Count = 16;
 // Maximum number of times the producer slot array can grow
@@ -149,7 +142,8 @@ public:
 private:
 	friend class cqdetail::producer_buffer<T, Allocator>;
 
-	typedef typename cqdetail::shared_ptr_type_wrapper<T, Allocator>::shared_ptr_type shared_ptr_type;
+	typedef cqdetail::shared_ptr_allocator_adaptor<uint8_t, Allocator> allocator_adapter_type;
+	typedef shared_ptr<cqdetail::producer_buffer<T, Allocator>, allocator_adapter_type> shared_ptr_type;
 
 	template <class ...Arg>
 	void push_internal(Arg&&... in);
@@ -400,9 +394,9 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue<T, Allocator>::create_producer_buffer(std::size_t withSize)
 {
-	const std::size_t log2size(cqdetail::log2_align(withSize, cqdetail::Buffer_Capacity_Max));
+	const std::size_t log2size(cqdetail::log2_align(withSize, Buffer_Capacity_Max));
 
-	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block<void*, cqdetail::shared_ptr_type_wrapper<T, Allocator>::allocator_adaptor_type>));
+	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block<void*, allocator_adapter_type>));
 	const std::size_t alignOfData(alignof(T));
 	const std::size_t alignOfBuffer(alignof(cqdetail::producer_buffer<T, Allocator>));
 
@@ -411,7 +405,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue
 
 	const std::size_t bufferByteSize(sizeof(cqdetail::producer_buffer<T, Allocator>));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
-	const std::size_t controlBlockByteSize(shared_ptr_type::Alloc_Size_Claim);
+	const std::size_t controlBlockByteSize(shared_ptr_type::alloc_size_claim());
 
 	const std::size_t controlBlockSize(cqdetail::aligned_size(controlBlockByteSize, maxAlign));
 	const std::size_t bufferSize(cqdetail::aligned_size(bufferByteSize, maxAlign));
@@ -449,7 +443,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue
 	}
 #endif
 
-	typename cqdetail::shared_ptr_type_wrapper<T, Allocator>::allocator_adaptor_type allocAdaptor(totalBlock, totalBlockSize);
+	allocator_adapter_type allocAdaptor(totalBlock, totalBlockSize);
 
 	auto deleter = [](cqdetail::producer_buffer<T, Allocator>* obj)
 	{
@@ -508,7 +502,7 @@ inline void concurrent_queue<T, Allocator>::try_alloc_produer_store_slot(uint8_t
 		for (std::size_t i = 0; i < producerCapacity; ++i){
 			newProducerSlotBlock[i].~shared_ptr_type();
 		}
-		myAllocator.deallocate(block);
+		myAllocator.deallocate(block, blockSize);
 	}
 }
 // Try swapping the current producer array for one from the store, and follow up
@@ -623,8 +617,7 @@ template <class T, class Allocator>
 class alignas(CQ_CACHELINE_SIZE) producer_buffer
 {
 private:
-	//typedef typename concurrent_queue<T, Allocator>::shared_ptr_type shared_ptr_type;
-	typedef typename shared_ptr_type_wrapper<T, Allocator>::shared_ptr_type shared_ptr_type;
+	typedef typename concurrent_queue<T, Allocator>::shared_ptr_type shared_ptr_type;
 
 public:
 	typedef typename concurrent_queue<T>::size_type size_type;
