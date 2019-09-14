@@ -279,7 +279,7 @@ bool concurrent_queue<T, Allocator>::try_pop(T & out)
 {
 	const size_type consumerSlot(myObjectId);
 	if (!(consumerSlot < ourConsumers.size()))
-		ourConsumers.resize(consumerSlot + 1, cqdetail::consumer_wrapper<shared_ptr_type>{ &ourDummyBuffer, 0 , (static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()))});
+		ourConsumers.resize(consumerSlot + 1, cqdetail::consumer_wrapper<shared_ptr_type>(ourDummyBuffer));
 
 	cqdetail::producer_buffer<T, Allocator>* buffer = ourConsumers[consumerSlot].myPtr.get_owned();
 
@@ -1262,6 +1262,11 @@ constexpr std::size_t aligned_size(std::size_t byteSize, std::size_t align)
 template <class PtrType>
 struct consumer_wrapper
 {
+	consumer_wrapper(PtrType ptr)
+		: myPtr(std::move(ptr))
+		, myPopCounter(0)
+		, myRelocationIndex(static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()))
+	{}
 	PtrType myPtr;
 	uint16_t myPopCounter;
 	uint16_t myRelocationIndex;
@@ -1270,11 +1275,14 @@ template <class T, class Allocator>
 class shared_ptr_allocator_adaptor : public Allocator
 {
 public:
+	shared_ptr_allocator_adaptor()
+		: myAddress(nullptr)
+		, mySize(0)
+	{};
 	shared_ptr_allocator_adaptor(T* retAddr, std::size_t size)
 		: myAddress(retAddr)
 		, mySize(size)
-	{
-	};
+	{};
 
 	T* allocate(std::size_t /*count*/)
 	{
@@ -1295,8 +1303,8 @@ std::atomic<typename concurrent_queue<T, Allocator>::size_type> concurrent_queue
 template <class T, class Allocator>
 thread_local std::vector<typename concurrent_queue<T, Allocator>::shared_ptr_type, Allocator> concurrent_queue<T, Allocator>::ourProducers(4, nullptr);
 template <class T, class Allocator>
-thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_type>, Allocator> concurrent_queue<T, Allocator>::ourConsumers(4, {&concurrent_queue<T, Allocator>::ourDummyBuffer, 0, (static_cast<uint16_t>(rand() % std::numeric_limits<uint16_t>::max()))});
+thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_type>, Allocator> concurrent_queue<T, Allocator>::ourConsumers;
 template <class T, class Allocator>
-typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue<T, Allocator>::ourDummyBuffer(make_shared<cqdetail::producer_buffer<T, Allocator>, Allocator>(0, nullptr));
+typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue<T, Allocator>::ourDummyBuffer(make_shared<cqdetail::producer_buffer<T, Allocator>, typename concurrent_queue<T, Allocator>::allocator_adapter_type>(0, nullptr));
 }
 #pragma warning(pop)
