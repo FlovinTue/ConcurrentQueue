@@ -7,7 +7,7 @@
 
 const uint32_t Writes = 2048;
 const uint32_t Writers = 4;
-const uint32_t Readers = 8;
+const uint32_t Readers = 4;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 const uint32_t blaha = WritesPerThread * Writers;
