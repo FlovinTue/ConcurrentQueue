@@ -22,10 +22,8 @@ Global
 		{A3FDEB2F-1384-4518-8E8B-AF0DEF18FE4E}.Release|x64.Build.0 = Release|x64
 		{A3FDEB2F-1384-4518-8E8B-AF0DEF18FE4E}.Release|x86.ActiveCfg = Release|x64
 		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Debug|x64.ActiveCfg = Debug|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Debug|x64.Build.0 = Debug|x64
 		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Debug|x86.ActiveCfg = Debug|x64
 		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Release|x64.ActiveCfg = Release|x64
-		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Release|x64.Build.0 = Release|x64
 		{F2B36960-1C2E-402A-91BE-CD8C1539E38B}.Release|x86.ActiveCfg = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
