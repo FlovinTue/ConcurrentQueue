@@ -1,60 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
-  <Type Name="gdul::concurrent_queue&lt;*&gt;">
-    <Expand>
-  
+	<Type Name="gdul::concurrent_queue&lt;*&gt;">
+		<Expand>
+			<CustomListItems>
+				<Variable Name = "sizeAccumulator" InitialValue = "0"/>
+				<Variable Name = "producerIndex" InitialValue = "0" />
+				<Variable Name = "pBuffer" InitialValue = "(buffer_type*) ((myDebugView[0].myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(myDebugView[0].myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)myDebugView[0].myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))" />
+				<Loop>
+					<Break Condition = "producerIndex == myProducerCount._My_val" />
+					<Loop>
+						<Exec>
+							sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)
+						</Exec>
+						<Break Condition = "((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2))) == 0)"/>
+						<Exec>
+							pBuffer = ((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))
+						</Exec>
+					</Loop>
+					<Exec>
+						++producerIndex
+					</Exec>
+					<Exec>
+						pBuffer = ((myDebugView[producerIndex].myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(myDebugView[producerIndex].myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)myDebugView[producerIndex].myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))
+					</Exec>
+				</Loop>
+				<Item Name = "[size]">sizeAccumulator</Item>
+				<Item Name = "[producer_count]">myProducerCount._My_val</Item>
+			</CustomListItems>
+			<ArrayItems>
+				<Size>myProducerCount._My_val</Size>
+				<ValuePointer>myDebugView</ValuePointer>
+			</ArrayItems>
+		</Expand>
+	</Type>
+	<Type Name="gdul::cqdetail::producer_buffer&lt;*&gt;">
 
-      <ArrayItems>
-        <Size>myProducerCount._My_val</Size>
-        <ValuePointer>myDebugView</ValuePointer>
-      </ArrayItems>
-    </Expand>
-  </Type>
-  <Type Name="gdul::cqdetail::producer_buffer&lt;*&gt;">
-   
-    <Expand>
-      <CustomListItems MaxItemsPerView="512">
-        <Variable Name="pBuffer" InitialValue="this" />
-        <Variable Name="itemCount" InitialValue="0"/>
-        <Variable Name="pItem" InitialValue="myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))"/>
-        <Variable Name="sizeAccumulator" InitialValue="0"/>
+		<Expand>
+			<CustomListItems MaxItemsPerView="512">
+				<Variable Name="pBuffer" InitialValue="this" />
+				<Variable Name="itemCount" InitialValue="0"/>
+				<Variable Name="pItem" InitialValue="myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))"/>
+				<Variable Name="sizeAccumulator" InitialValue="0"/>
 
-        <Loop>
-            <Exec>sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)</Exec>
-            <Break Condition="pBuffer->myNext == nullptr" />
-            <Exec>pBuffer = pBuffer->myNext</Exec>
-        </Loop>
- 
-        <Item Name="[size]">sizeAccumulator</Item>
-        
-        <Exec>pBuffer = this</Exec>
-        
-        <Loop>
-          <If Condition="itemCount == (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
-            <Break Condition="pBuffer->myNext == nullptr" />
-            <Exec>pBuffer = pBuffer->myNext</Exec>
-            <Exec>pItem = pBuffer->myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))</Exec>
-            <Exec>itemCount = 0</Exec>
-          </If>
-          <If Condition="itemCount != (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
-          <Item>*pItem</Item>
-          <Exec>++pItem</Exec>
-          <If Condition="pItem == (pBuffer->myDataBlock + pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
-            <Exec>pItem= pBuffer->myDataBlock</Exec>
-          </If>
-          <Exec>++itemCount</Exec>
-          </If>
-        </Loop>
-      </CustomListItems>
-    </Expand>
-  </Type>
-  <Type Name="gdul::cqdetail::item_container&lt;*&gt;">
-    <DisplayString>{myData}</DisplayString>
-    <Expand>
-      <ExpandedItem>myData</ExpandedItem>
-    </Expand>
-  </Type>
+				<Loop>
+					<Exec>sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)</Exec>
+					<Break Condition="((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2))) == 0)" />
+					<Exec>pBuffer = ((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))</Exec>
+				</Loop>
+
+				<Item Name="[size]">sizeAccumulator</Item>
+
+				<Exec>pBuffer = this</Exec>
+
+				<Loop>
+					<If Condition="itemCount == (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+						<Break Condition="((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2))) == 0)" />
+						<Exec>pBuffer = ((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))</Exec>
+						<Exec>pItem = pBuffer->myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))</Exec>
+						<Exec>itemCount = 0</Exec>
+					</If>
+					<If Condition="itemCount != (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+						<Item>*pItem</Item>
+						<Exec>++pItem</Exec>
+						<If Condition="pItem == (pBuffer->myDataBlock + pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+							<Exec>pItem= pBuffer->myDataBlock</Exec>
+						</If>
+						<Exec>++itemCount</Exec>
+					</If>
+				</Loop>
+			</CustomListItems>
+		</Expand>
+	</Type>
+	<Type Name="gdul::cqdetail::item_container&lt;*&gt;">
+		<DisplayString>{myData}</DisplayString>
+		<Expand>
+			<ExpandedItem>myData</ExpandedItem>
+		</Expand>
+	</Type>
 
 
 </AutoVisualizer>
