@@ -85,6 +85,9 @@ class producer_buffer;
 template <class T>
 class item_container;
 
+template <class T, class Allocator>
+class dummy_container;
+
 template <class ValueDummy, class Allocator>
 class index_pool;
 
@@ -146,9 +149,9 @@ public:
 	// need to throw consumers out of a buffer whilst repairing it
 	static constexpr size_type Buffer_Capacity_Max = ~(std::numeric_limits<size_type>::max() >> 3) / 2;
 
-private:
 	friend class cqdetail::producer_buffer<T, Allocator>;
 
+private:
 	typedef cqdetail::shared_ptr_allocator_adaptor<uint8_t, Allocator> allocator_adapter_type;
 	typedef shared_ptr<cqdetail::producer_buffer<T, Allocator>, allocator_adapter_type> shared_ptr_type;
 	typedef atomic_shared_ptr<cqdetail::producer_buffer<T, Allocator>, allocator_adapter_type> atomic_shared_ptr_type;
@@ -179,7 +182,8 @@ private:
 	static thread_local std::vector<cqdetail::consumer_wrapper<shared_ptr_type>, allocator_type> ourConsumers;
 
 	static cqdetail::index_pool<T, allocator_type> ourIndexPool;
-	static shared_ptr_type ourDummyBuffer;
+	static cqdetail::dummy_container<T, Allocator> ourDummyContainer;
+
 	static std::atomic<uint16_t> ourRelocationIndex;
 
 	std::atomic<atomic_shared_ptr_type*> myProducerArrayStore[cqdetail::Producer_Slots_Max_Growth_Count];
@@ -240,6 +244,7 @@ inline concurrent_queue<T, Allocator>::~concurrent_queue()
 
 		for (uint16_t slotIndex = 0; slotIndex < slotSize; ++slotIndex) {
 			storeSlot[slotIndex]->unsafe_clear();
+			storeSlot[slotIndex]->invalidate();
 			storeSlot[slotIndex].unsafe_store(nullptr);
 		}
 
@@ -268,7 +273,7 @@ inline void concurrent_queue<T, Allocator>::push_internal(Arg&& ...in)
 	const size_type producerSlot(myInstanceIndex);
 
 	if (!(producerSlot < ourProducers.size()))
-		ourProducers.resize(producerSlot + 1, ourDummyBuffer);
+		ourProducers.resize(producerSlot + 1, ourDummyContainer.myDummyBuffer);
 
 	cqdetail::producer_buffer<T, Allocator>* buffer(ourProducers[producerSlot].get_owned());
 
@@ -289,7 +294,7 @@ bool concurrent_queue<T, Allocator>::try_pop(T & out)
 {
 	const size_type consumerSlot(myInstanceIndex);
 	if (!(consumerSlot < ourConsumers.size()))
-		ourConsumers.resize(consumerSlot + 1, cqdetail::consumer_wrapper<shared_ptr_type>(ourDummyBuffer));
+		ourConsumers.resize(consumerSlot + 1, cqdetail::consumer_wrapper<shared_ptr_type>(ourDummyContainer.myDummyBuffer));
 
 	cqdetail::producer_buffer<T, Allocator>* buffer = ourConsumers[consumerSlot].myPtr.get_owned();
 
@@ -1334,6 +1339,19 @@ private:
 	T* myAddress;
 	std::size_t mySize;
 };
+template <class T, class Allocator>
+class dummy_container
+{
+public:
+	dummy_container();
+	typedef shared_ptr<producer_buffer<T, Allocator>, shared_ptr_allocator_adaptor<uint8_t, Allocator>> dummy_type;
+
+private:
+	item_container<T> myDummyItem;
+	producer_buffer<T, Allocator> myDummyRawBuffer;
+public:
+	dummy_type myDummyBuffer;
+};
 template <class ValueDummy, class Allocator>
 class index_pool
 {
@@ -1399,6 +1417,13 @@ inline void index_pool<ValueDummy, Allocator>::add(std::size_t index)
 		entry->myNext = std::move(top);
 	} while (!myTop.compare_exchange_strong(expected, std::move(entry)));
 }
+template<class T, class Allocator>
+inline dummy_container<T, Allocator>::dummy_container()
+	: myDummyItem(item_state::Dummy)
+	, myDummyRawBuffer(1, &myDummyItem)
+	, myDummyBuffer(&myDummyRawBuffer, [](producer_buffer<T, Allocator>*) {})
+{
+}
 }
 template <class T, class Allocator>
 cqdetail::index_pool<T, Allocator> concurrent_queue<T, Allocator>::ourIndexPool;
@@ -1407,7 +1432,7 @@ thread_local std::vector<typename concurrent_queue<T, Allocator>::shared_ptr_typ
 template <class T, class Allocator>
 thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_type>, Allocator> concurrent_queue<T, Allocator>::ourConsumers;
 template <class T, class Allocator>
-typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue<T, Allocator>::ourDummyBuffer(make_shared<cqdetail::producer_buffer<T, Allocator>, typename concurrent_queue<T, Allocator>::allocator_adapter_type>(1, new cqdetail::item_container<T>(cqdetail::item_state::Dummy)));
+cqdetail::dummy_container<T, Allocator> concurrent_queue<T, Allocator>::ourDummyContainer;
 template <class T, class Allocator>
 std::atomic<uint16_t> concurrent_queue<T, Allocator>::ourRelocationIndex(0);
 template <class ValueDummy, class Allocator>

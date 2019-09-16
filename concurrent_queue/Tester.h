@@ -10,8 +10,7 @@ const uint32_t Writers = 4;
 const uint32_t Readers = 4;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
-const uint32_t blaha = WritesPerThread * Writers;
-const uint32_t bla = ReadsPerThread * Readers;
+
 template <class T>
 class Tester
 {
