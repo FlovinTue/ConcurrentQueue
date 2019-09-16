@@ -272,14 +272,15 @@ inline void concurrent_queue<T, Allocator>::push_internal(Arg&& ...in)
 
 	cqdetail::producer_buffer<T, Allocator>* buffer(ourProducers[producerSlot].get_owned());
 
-	if (!buffer->is_valid()) {
-		init_producer(myInitBufferCapacity);
-		buffer = ourProducers[producerSlot].get_owned();
-	}
 	if (!buffer->try_push(std::forward<Arg>(in)...)) {
-		shared_ptr_type next(create_producer_buffer(std::size_t(buffer->get_capacity()) * 2));
-		buffer->push_front(next);
-		ourProducers[producerSlot] = std::move(next);
+		if (!buffer->is_valid()) {
+			init_producer(myInitBufferCapacity);
+		}
+		else {
+			shared_ptr_type next(create_producer_buffer(std::size_t(buffer->get_capacity()) * 2));
+			buffer->push_front(next);
+			ourProducers[producerSlot] = std::move(next);
+		}
 		ourProducers[producerSlot]->try_push(std::forward<Arg>(in)...);
 	}
 }
@@ -707,16 +708,13 @@ private:
 #endif
 	size_type myWriteSlot;
 	std::atomic<size_type> myPostWriteIterator;
-
 	CQ_PADDING(CQ_CACHELINE_SIZE);
 
 	shared_ptr_type myNext;
-
 	const size_type myCapacity;
 
 	item_container<T>* const myDataBlock;
 };
-
 template<class T, class Allocator>
 inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_container<T>* dataBlock)
 	: myNext(nullptr)
@@ -750,12 +748,12 @@ inline bool producer_buffer<T, Allocator>::is_active() const
 template<class T, class Allocator>
 inline bool producer_buffer<T, Allocator>::is_valid() const
 {
-	return myWriteSlot == myPostWriteIterator._My_val;
+	return myDataBlock[myWriteSlot % myCapacity].get_state_local() != item_state::Dummy;
 }
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::invalidate()
 {
-	myPostWriteIterator.store(myWriteSlot + 1);
+	myDataBlock[myWriteSlot % myCapacity].set_state(item_state::Dummy);
 }
 template<class T, class Allocator>
 inline typename producer_buffer<T, Allocator>::shared_ptr_type producer_buffer<T, Allocator>::find_back()
@@ -1067,6 +1065,7 @@ public:
 	item_container<T>& operator=(const item_container&) = delete;
 
 	inline item_container();
+	inline item_container(item_state state);
 
 	inline void store(const T& in);
 	inline void store(T&& in);
@@ -1119,6 +1118,11 @@ inline item_container<T>::item_container()
 #else
 	, myState(item_state::Empty)
 #endif
+{
+}
+template<class T>
+inline item_container<T>::item_container(item_state state)
+	: myState(state)
 {
 }
 template<class T>
@@ -1218,7 +1222,8 @@ enum class item_state : uint8_t
 {
 	Empty,
 	Valid,
-	Failed
+	Failed,
+	Dummy
 };
 std::size_t log2_align(std::size_t from, std::size_t clamp)
 {
@@ -1402,7 +1407,7 @@ thread_local std::vector<typename concurrent_queue<T, Allocator>::shared_ptr_typ
 template <class T, class Allocator>
 thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_type>, Allocator> concurrent_queue<T, Allocator>::ourConsumers;
 template <class T, class Allocator>
-typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue<T, Allocator>::ourDummyBuffer(make_shared<cqdetail::producer_buffer<T, Allocator>, typename concurrent_queue<T, Allocator>::allocator_adapter_type>(0, nullptr));
+typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue<T, Allocator>::ourDummyBuffer(make_shared<cqdetail::producer_buffer<T, Allocator>, typename concurrent_queue<T, Allocator>::allocator_adapter_type>(1, new cqdetail::item_container<T>(cqdetail::item_state::Dummy)));
 template <class T, class Allocator>
 std::atomic<uint16_t> concurrent_queue<T, Allocator>::ourRelocationIndex(0);
 template <class ValueDummy, class Allocator>
