@@ -1340,7 +1340,7 @@ public:
 	T* allocate(std::size_t count)
 	{
 		if (!myAddress) {
-			myAddress = this->std::allocator<T>::allocate(count);
+			myAddress = this->Allocator::allocate(count);
 			mySize = count;
 		}
 		return myAddress;
