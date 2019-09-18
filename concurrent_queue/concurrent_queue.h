@@ -26,7 +26,6 @@
 #include <atomic_shared_ptr.h>
 
 
-//
 // Exception handling may be enabled for basic exception safety at the cost of 
 // a slight performance decrease
 
@@ -58,7 +57,7 @@
 #define CQ_PADDING(bytes) const uint8_t MAKE_UNIQUE_NAME(trash)[bytes] {}
 #define CQ_CACHELINE_SIZE 64u
 
-// For anonymous struct and alignas(64) 
+// For anonymous struct and alignas 
 #pragma warning(push, 2)
 #pragma warning(disable : 4201) 
 #pragma warning(disable : 4324) 
