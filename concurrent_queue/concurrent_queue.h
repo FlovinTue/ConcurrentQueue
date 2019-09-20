@@ -172,7 +172,7 @@ private:
 	inline void try_swap_producer_count(uint16_t toValue);
 	inline void try_swap_producer_array_capacity(uint16_t toCapacity);
 	inline bool has_producer_array_been_superceeded(uint16_t arraySlot);
-
+	inline void kill_arrays_below(uint16_t belowIndex, bool doInvalidate);
 	inline uint16_t claim_store_slot();
 	inline shared_ptr_type fetch_from_store(uint16_t bufferSlot) const;
 	inline void insert_to_store(shared_ptr_type buffer, uint16_t bufferSlot, uint16_t storeSlot);
@@ -195,12 +195,12 @@ private:
 		std::atomic<atomic_shared_ptr_type*> myProducerSlots;
 		const shared_ptr_type* myDebugView;
 	};
-	allocator_type myAllocator;
-
 	std::atomic<uint16_t> myProducerCount;
 	std::atomic<uint16_t> myProducerCapacity;
 	std::atomic<uint16_t> myProducerSlotReservation;
 	std::atomic<uint16_t> myProducerSlotPostIterator;
+
+	allocator_type myAllocator;
 };
 
 template<class T, class Allocator>
@@ -240,22 +240,7 @@ inline concurrent_queue<T, Allocator>::~concurrent_queue()
 	const uint16_t producerCount(myProducerCount.load(std::memory_order_relaxed));
 	const uint16_t slots(cqdetail::to_store_array_slot(producerCount - static_cast<bool>(producerCount)) + static_cast<bool>(producerCount));
 
-	for (uint16_t i = 0; i < slots; ++i) {
-		const uint16_t slotSize(static_cast<uint16_t>(std::pow(2, i + 1)));
-		atomic_shared_ptr_type* const storeSlot(myProducerArrayStore[i].load(std::memory_order_relaxed));
-
-		for (uint16_t slotIndex = 0; slotIndex < slotSize; ++slotIndex) {
-			if (storeSlot[slotIndex]){
-				storeSlot[slotIndex]->unsafe_clear();
-				storeSlot[slotIndex]->invalidate();
-			}
-			storeSlot[slotIndex].unsafe_store(nullptr);
-		}
-
-		const std::size_t slotByteSize(slotSize * sizeof(atomic_shared_ptr_type));
-		uint8_t* const storeBlock(reinterpret_cast<uint8_t*>(storeSlot));
-		myAllocator.deallocate(storeBlock, slotByteSize);
-	}
+	kill_arrays_below(slots, true);
 
 	ourIndexPool.add(myInstanceIndex);
 }
@@ -485,6 +470,8 @@ inline void concurrent_queue<T, Allocator>::push_producer_buffer(shared_ptr_type
 
 		try_swap_producer_array(cqdetail::to_store_array_slot(postIterator - 1));
 		try_swap_producer_count(postIterator);
+
+		kill_arrays_below(cqdetail::to_store_array_slot(bufferSlot), false);
 	}
 }
 // Allocate a buffer array of capacity appropriate to the slot
@@ -575,6 +562,33 @@ inline bool concurrent_queue<T, Allocator>::has_producer_array_been_superceeded(
 	}
 
 	return false;
+}
+template<class T, class Allocator>
+inline void concurrent_queue<T, Allocator>::kill_arrays_below(uint16_t belowIndex, bool doInvalidate)
+{
+	for (uint16_t i = 0; i < belowIndex; ++i)
+	{
+		const uint16_t slotSize(static_cast<uint16_t>(std::pow(2, i + 1)));
+		atomic_shared_ptr_type* const storeSlot(myProducerArrayStore[i].exchange(nullptr, std::memory_order_acq_rel));
+		if (!storeSlot){
+			continue;
+		}
+		for (uint16_t slotIndex = 0; slotIndex < slotSize; ++slotIndex)
+		{
+			//if (storeSlot[slotIndex])
+			{
+				if (doInvalidate){
+					storeSlot[slotIndex]->unsafe_clear();
+					storeSlot[slotIndex]->invalidate();
+				}
+			}
+			storeSlot[slotIndex].unsafe_store(nullptr);
+		}
+
+		const std::size_t slotByteSize(slotSize * sizeof(atomic_shared_ptr_type));
+		uint8_t* const storeBlock(reinterpret_cast<uint8_t*>(storeSlot));
+		myAllocator.deallocate(storeBlock, slotByteSize);
+	}
 }
 template<class T, class Allocator>
 inline uint16_t concurrent_queue<T, Allocator>::claim_store_slot()
