@@ -91,6 +91,9 @@ class dummy_container;
 template <class IndexType, class Allocator>
 class index_pool;
 
+template <class T, class Allocator>
+class buffer_deleter;
+
 enum class item_state : uint8_t;
 
 std::size_t log2_align(std::size_t from, std::size_t clamp);
@@ -151,13 +154,14 @@ public:
 
 private:
 	friend class cqdetail::producer_buffer<T, Allocator>;
+	friend class cqdetail::dummy_container<T, Allocator>;
 
 	typedef cqdetail::producer_buffer<T, Allocator> buffer_type;
 	typedef cqdetail::shared_ptr_allocator_adaptor<uint8_t, Allocator> allocator_adapter_type;
 	typedef shared_ptr<buffer_type, allocator_adapter_type> shared_ptr_type;
 	typedef atomic_shared_ptr<buffer_type, allocator_adapter_type> atomic_shared_ptr_type;
 
-	typedef int nonsense;
+	using vector_allocator = typename std::allocator_traits<Allocator>::template rebind_alloc<shared_ptr_type>;
 
 	template <class ...Arg>
 	void push_internal(Arg&&... in);
@@ -181,8 +185,8 @@ private:
 	const size_type myInitBufferCapacity;
 	const size_type myInstanceIndex;
 
-	static thread_local std::vector<shared_ptr_type, allocator_type> ourProducers;
-	static thread_local std::vector<cqdetail::consumer_wrapper<shared_ptr_type>, allocator_type> ourConsumers;
+	static thread_local std::vector<shared_ptr_type, vector_allocator> ourProducers;
+	static thread_local std::vector<cqdetail::consumer_wrapper<shared_ptr_type>, vector_allocator> ourConsumers;
 
 	static cqdetail::index_pool<size_type, allocator_type> ourIndexPool;
 	static cqdetail::dummy_container<T, Allocator> ourDummyContainer;
@@ -196,12 +200,12 @@ private:
 		std::atomic<atomic_shared_ptr_type*> myProducerSlots;
 		const shared_ptr_type* myDebugView;
 	};
-	allocator_type myAllocator;
-
 	std::atomic<uint16_t> myProducerCount;
 	std::atomic<uint16_t> myProducerCapacity;
 	std::atomic<uint16_t> myProducerSlotReservation;
 	std::atomic<uint16_t> myProducerSlotPostIterator;
+
+	allocator_type myAllocator;
 };
 
 template<class T, class Allocator>
@@ -246,9 +250,9 @@ inline concurrent_queue<T, Allocator>::~concurrent_queue()
 		atomic_shared_ptr_type* const storeSlot(myProducerArrayStore[i].load(std::memory_order_relaxed));
 
 		for (uint16_t slotIndex = 0; slotIndex < slotSize; ++slotIndex) {
-			if (storeSlot[slotIndex]){
-				storeSlot[slotIndex]->unsafe_clear();
-				storeSlot[slotIndex]->invalidate();
+			if (storeSlot[slotIndex]) {
+				storeSlot[slotIndex].unsafe_get_versioned_raw_ptr()->unsafe_clear();
+				storeSlot[slotIndex].unsafe_get_versioned_raw_ptr()->invalidate();
 			}
 			storeSlot[slotIndex].unsafe_store(nullptr);
 		}
@@ -344,7 +348,7 @@ inline void concurrent_queue<T, Allocator>::unsafe_clear()
 	std::atomic_thread_fence(std::memory_order_acquire);
 
 	for (uint16_t i = 0; i < myProducerCount.load(std::memory_order_relaxed); ++i) {
-		myProducerSlots[i]->unsafe_clear();
+		myProducerSlots[i].unsafe_get_versioned_raw_ptr()->unsafe_clear();
 	}
 
 	std::atomic_thread_fence(std::memory_order_release);
@@ -381,7 +385,7 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 		if (!producerBuffer->is_active()) {
 			shared_ptr_type successor = producerBuffer->find_back();
 			if (successor) {
-				if (myProducerSlots[entry].get_owned() != successor.get_owned()) {
+				if (myProducerSlots[entry].unsafe_get_versioned_raw_ptr().get_owned() != successor.get_owned()) {
 					if (producerBuffer->verify_successor(successor)) {
 						producerBuffer = std::move(successor);
 						myProducerSlots[entry].store(producerBuffer);
@@ -402,7 +406,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue
 {
 	const std::size_t log2size(cqdetail::log2_align(withSize, Buffer_Capacity_Max));
 
-	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block<void*, allocator_adapter_type>));
+	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block_claim_custom_delete<buffer_type, allocator_adapter_type, cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>>));
 	const std::size_t alignOfData(alignof(T));
 	const std::size_t alignOfBuffer(alignof(buffer_type));
 
@@ -451,12 +455,8 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_type concurrent_queue
 
 	allocator_adapter_type allocAdaptor(totalBlock, totalBlockSize);
 
-	auto deleter = [](buffer_type* obj)
-	{
-		(*obj).~producer_buffer<T, Allocator>();
-	};
 
-	shared_ptr_type returnValue(buffer, deleter, allocAdaptor);
+	shared_ptr_type returnValue(buffer, cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>(), allocAdaptor);
 
 	return returnValue;
 }
@@ -582,7 +582,7 @@ inline uint16_t concurrent_queue<T, Allocator>::claim_store_slot()
 {
 	uint16_t reservedSlot(std::numeric_limits<uint16_t>::max());
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	for (bool foundSlot(false);!foundSlot;)
+	for (bool foundSlot(false); !foundSlot;)
 	{
 		uint16_t expectedSlot(myProducerSlotReservation.load(std::memory_order_acquire));
 		const uint8_t storeArraySlot(cqdetail::to_store_array_slot(expectedSlot));
@@ -773,27 +773,29 @@ inline void producer_buffer<T, Allocator>::invalidate()
 template<class T, class Allocator>
 inline typename producer_buffer<T, Allocator>::shared_ptr_type producer_buffer<T, Allocator>::find_back()
 {
-	producer_buffer<T, Allocator>* back(this);
-	shared_ptr_type sharedBack(nullptr);
+	bool nextState(myNextState.load(std::memory_order_acquire));
+	shared_ptr_type back(nullptr);
+	producer_buffer<T, Allocator>* inspect(this);
 
-	while (back) {
-		const size_type readSlot(back->myReadSlot.load(std::memory_order_acquire));
-		const size_type postWrite(back->myPostWriteIterator.load(std::memory_order_acquire));
+	while (nextState) {
+		const size_type readSlot(inspect->myReadSlot.load(std::memory_order_acquire));
+		const size_type postWrite(inspect->myPostWriteIterator.load(std::memory_order_acquire));
 
 		const bool thisBufferEmpty(readSlot == postWrite);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-		const bool veto(back->myFailiureCount.load(std::memory_order_acquire) != back->myFailiureIndex.load(std::memory_order_acquire));
+		const bool veto(inspect->myFailiureCount.load(std::memory_order_acquire) != inspect->myFailiureIndex.load(std::memory_order_acquire));
 		const bool valid(!thisBufferEmpty | veto);
 #else
 		const bool valid(!thisBufferEmpty);
 #endif
 		if (valid) {
 			break;
+		}
+		back = inspect->myNext;
+		inspect = back.get_owned();
+		nextState = back->myNextState.load(std::memory_order_acquire);
 	}
-		sharedBack = back->myNext;
-		back = sharedBack.get_owned();
-}
-	return sharedBack;
+	return back;
 }
 
 template<class T, class Allocator>
@@ -803,7 +805,7 @@ inline typename producer_buffer<T, Allocator>::size_type producer_buffer<T, Allo
 	size_type accumulatedSize(myPostWriteIterator.load(std::memory_order_relaxed));
 	accumulatedSize -= readSlot;
 
-	if (myNext)
+	if (myNextState.load(std::memory_order_acquire))
 		accumulatedSize += myNext->size();
 
 	return accumulatedSize;
@@ -895,11 +897,11 @@ template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::push_front(shared_ptr_type newBuffer)
 {
 	producer_buffer<T, Allocator>* last(this);
-	shared_ptr_type sharedLast(nullptr);
+	versioned_raw_ptr<typename shared_ptr_type::value_type, typename shared_ptr_type::allocator_type> verLast(nullptr);
 
 	while (last->myNext) {
-		sharedLast = last->myNext;
-		last = sharedLast.get_owned();
+		verLast = last->myNext;
+		last = verLast.get_owned();
 	}
 	last->myNext = std::move(newBuffer);
 	last->myNextState.store(true, std::memory_order_release);
@@ -1267,25 +1269,29 @@ std::size_t log2_align(std::size_t from, std::size_t clamp)
 template<class T, class Allocator>
 std::size_t calc_block_size(std::size_t fromCapacity)
 {
+	typedef typename concurrent_queue<T, Allocator>::buffer_type buffer_type;
+	typedef typename concurrent_queue<T, Allocator>::allocator_adaptor_type allocator_adaptor_type;
+	typedef buffer_deleter<buffer_type, allocator_adaptor_type> deleter_type;
+	
 	const std::size_t log2size(cqdetail::log2_align(fromCapacity, cqdetail::Buffer_Capacity_Max));
-
-	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block<void*, typename concurrent_queue<T, Allocator>::shared_ptr_allocator_adaptor_type>));
+	
+	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block_claim_custom_delete<buffer_type, allocator_adaptor_type, deleter_type>));
 	const std::size_t alignOfData(alignof(T));
 	const std::size_t alignOfBuffer(alignof(cqdetail::producer_buffer<T, Allocator>));
-
+	
 	const std::size_t maxAlignBuffData(alignOfBuffer < alignOfData ? alignOfData : alignOfBuffer);
 	const std::size_t maxAlign(maxAlignBuffData < alignOfControlBlock ? alignOfControlBlock : maxAlignBuffData);
-
+	
 	const std::size_t bufferByteSize(sizeof(cqdetail::producer_buffer<T, Allocator>));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
 	const std::size_t controlBlockByteSize(shared_ptr_type::Alloc_Size_Claim);
-
+	
 	const std::size_t controlBlockSize(cqdetail::aligned_size(controlBlockByteSize, maxAlign));
 	const std::size_t bufferSize(cqdetail::aligned_size(bufferByteSize, maxAlign));
 	const std::size_t dataBlockSize(cqdetail::aligned_size(dataBlockByteSize, maxAlign));
-
+	
 	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + maxAlign);
-
+	
 	return totalBlockSize;
 }
 inline uint8_t to_store_array_slot(uint16_t producerIndex)
@@ -1365,7 +1371,9 @@ class dummy_container
 {
 public:
 	dummy_container();
-	typedef shared_ptr<producer_buffer<T, Allocator>, shared_ptr_allocator_adaptor<uint8_t, Allocator>> dummy_type;
+	typedef typename concurrent_queue<T, Allocator>::shared_ptr_type  dummy_type;
+	typedef typename concurrent_queue<T, Allocator>::allocator_adapter_type allocator_adapter_type;
+	typedef typename concurrent_queue<T, Allocator>::buffer_type buffer_type;
 
 private:
 	item_container<T> myDummyItem;
@@ -1396,6 +1404,15 @@ public:
 
 private:
 	std::atomic<IndexType> myIterator;
+};
+template <class T, class Allocator>
+class buffer_deleter
+{
+public:
+	void operator()(T* obj, Allocator& /*alloc*/)
+	{
+		(*obj).~T();
+	};
 };
 template<class IndexType, class Allocator>
 inline index_pool<IndexType, Allocator>::index_pool()
@@ -1443,16 +1460,16 @@ template<class T, class Allocator>
 inline dummy_container<T, Allocator>::dummy_container()
 	: myDummyItem(item_state::Dummy)
 	, myDummyRawBuffer(1, &myDummyItem)
-	, myDummyBuffer(&myDummyRawBuffer, [](producer_buffer<T, Allocator>*) {})
 {
+	myDummyBuffer = dummy_type{ &myDummyRawBuffer, [](buffer_type*, allocator_adapter_type&) {} };
 }
 }
 template <class T, class Allocator>
 cqdetail::index_pool<typename concurrent_queue<T, Allocator>::size_type, Allocator> concurrent_queue<T, Allocator>::ourIndexPool;
 template <class T, class Allocator>
-thread_local std::vector<typename concurrent_queue<T, Allocator>::shared_ptr_type, Allocator> concurrent_queue<T, Allocator>::ourProducers(0);
+thread_local std::vector<typename concurrent_queue<T, Allocator>::shared_ptr_type, typename concurrent_queue<T, Allocator>::vector_allocator> concurrent_queue<T, Allocator>::ourProducers(0);
 template <class T, class Allocator>
-thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_type>, Allocator> concurrent_queue<T, Allocator>::ourConsumers;
+thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_type>, typename concurrent_queue<T, Allocator>::vector_allocator> concurrent_queue<T, Allocator>::ourConsumers;
 template <class T, class Allocator>
 cqdetail::dummy_container<T, Allocator> concurrent_queue<T, Allocator>::ourDummyContainer;
 template <class T, class Allocator>
