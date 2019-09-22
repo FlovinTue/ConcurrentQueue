@@ -26,7 +26,6 @@
 #include <atomic_shared_ptr.h>
 
 
-//
 // Exception handling may be enabled for basic exception safety at the cost of 
 // a slight performance decrease
 
@@ -58,7 +57,7 @@
 #define CQ_PADDING(bytes) const uint8_t MAKE_UNIQUE_NAME(trash)[bytes] {}
 #define CQ_CACHELINE_SIZE 64u
 
-// For anonymous struct and alignas(64) 
+// For anonymous struct and alignas 
 #pragma warning(push, 2)
 #pragma warning(disable : 4201) 
 #pragma warning(disable : 4324) 
@@ -177,7 +176,6 @@ private:
 	inline void try_swap_producer_count(uint16_t toValue);
 	inline void try_swap_producer_array_capacity(uint16_t toCapacity);
 	inline bool has_producer_array_been_superceeded(uint16_t arraySlot);
-
 	inline uint16_t claim_store_slot();
 	inline shared_ptr_type fetch_from_store(uint16_t bufferSlot) const;
 	inline void insert_to_store(shared_ptr_type buffer, uint16_t bufferSlot, uint16_t storeSlot);
@@ -1346,7 +1344,7 @@ public:
 	T* allocate(std::size_t count)
 	{
 		if (!myAddress) {
-			myAddress = this->std::allocator<T>::allocate(count);
+			myAddress = this->Allocator::allocate(count);
 			mySize = count;
 		}
 		return myAddress;
