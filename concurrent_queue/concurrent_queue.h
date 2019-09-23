@@ -92,6 +92,8 @@ class index_pool;
 
 template <class T, class Allocator>
 class buffer_deleter;
+template <class T, class Allocator>
+class store_array_deleter;
 
 enum class item_state : uint8_t;
 
@@ -1421,11 +1423,40 @@ template <class T, class Allocator>
 class buffer_deleter
 {
 public:
-	void operator()(T* obj, Allocator& /*alloc*/)
-	{
-		(*obj).~T();
-	};
+	void operator()(T* obj, Allocator& /*alloc*/);
 };
+template<class T, class Allocator>
+inline void buffer_deleter<T, Allocator>::operator()(T * obj, Allocator &)
+{
+	(*obj).~T();
+}
+template <class T, class Allocator>
+class store_array_deleter
+{
+public:
+	store_array_deleter(uint16_t capacity);
+	store_array_deleter(store_array_deleter<T, Allocator>&& other);
+	void operator()(T* obj, Allocator& alloc);
+
+private:
+	uint16_t myCapacity;
+};
+template<class T, class Allocator>
+inline store_array_deleter<T, Allocator>::store_array_deleter(uint16_t capacity)
+	: myCapacity(capacity)
+{
+}
+template<class T, class Allocator>
+inline store_array_deleter<T, Allocator>::store_array_deleter(store_array_deleter<T, Allocator>&& other)
+	: myCapacity(other.myCapacity)
+{
+}
+template<class T, class Allocator>
+inline void store_array_deleter<T, Allocator>::operator()(T * obj, Allocator & alloc)
+{
+	obj->~T();
+	alloc.deallocate(reinterpret_cast<uint8_t*>(obj), myCapacity * sizeof(T));
+}
 template<class IndexType, class Allocator>
 inline index_pool<IndexType, Allocator>::index_pool()
 	: myTop(nullptr)
