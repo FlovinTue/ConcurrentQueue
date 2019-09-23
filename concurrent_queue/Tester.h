@@ -11,11 +11,11 @@ const uint32_t Readers = 4;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
-template <class T>
+template <class T, class Allocator>
 class Tester
 {
 public:
-	Tester();
+	Tester(Allocator& alloc);
 	~Tester();
 
 	double ExecuteConcurrent(uint32_t aRuns);
@@ -26,7 +26,7 @@ private:
 	void Write();
 	void Read();
 
-	gdul::concurrent_queue<T> myQueue;
+	gdul::concurrent_queue<T, Allocator> myQueue;
 
 	ThreadPool myWorker;
 
@@ -36,24 +36,25 @@ private:
 	std::atomic<uint32_t> myThrown;
 };
 
-template<class T>
-inline Tester<T>::Tester() :
+template<class T, class Allocator>
+inline Tester<T, Allocator>::Tester(Allocator& alloc) :
 	myIsRunning(false),
 	myWorker(Writers + Readers),
 	myWrittenSum(0),
 	myReadSum(0),
-	myThrown(0)
+	myThrown(0),
+	myQueue(alloc)
 {
 	srand(static_cast<uint32_t>(time(0)));
 }
 
-template<class T>
-inline Tester<T>::~Tester()
+template<class T, class Allocator>
+inline Tester<T, Allocator>::~Tester()
 {
 	myWorker.Decommission();
 }
-template<class T>
-inline double Tester<T>::ExecuteConcurrent(uint32_t aRuns)
+template<class T, class Allocator>
+inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 {
 	double result(0.0);
 
@@ -89,16 +90,16 @@ inline double Tester<T>::ExecuteConcurrent(uint32_t aRuns)
 
 	return result;
 }
-template<class T>
-inline bool Tester<T>::CheckResults() const
+template<class T, class Allocator>
+inline bool Tester<T, Allocator>::CheckResults() const
 {
 	if (myWrittenSum != myReadSum)
 		return false;
 
 	return true;
 }
-template<class T>
-inline void Tester<T>::Write()
+template<class T, class Allocator>
+inline void Tester<T, Allocator>::Write()
 {
 	myQueue.reserve(WritesPerThread);
 
@@ -128,8 +129,8 @@ inline void Tester<T>::Write()
 	myWrittenSum += sum;
 }
 
-template<class T>
-inline void Tester<T>::Read()
+template<class T, class Allocator>
+inline void Tester<T, Allocator>::Read()
 {
 	while (!myIsRunning);
 

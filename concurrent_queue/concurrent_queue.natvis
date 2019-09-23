@@ -6,23 +6,37 @@
 			<CustomListItems>
 				<Variable Name = "sizeAccumulator" InitialValue = "0"/>
 				<Variable Name = "producerIndex" InitialValue = "0" />
-				<Variable Name = "pBuffer" InitialValue = "(buffer_type*) ((myDebugView[0].myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(myDebugView[0].myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)myDebugView[0].myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))" />
+				<Variable Name = "pBuffer" InitialValue = "(*((buffer_type**)
+					(
+					+8
+					+ ((myDebugView[producerIndex].myDebugView.myU64 >> 1) * 2)
+					- ((uint64_t)myDebugView[producerIndex].myDebugView.myU8[aspdetail::STORAGE_BYTE_VERSION] * (aspdetail::Ptr_Mask + 1))
+					- ((uint64_t)myDebugView[producerIndex].myDebugView.myU8[aspdetail::STORAGE_BYTE_COPYREQUEST] * (aspdetail::Ptr_Mask + 1))
+					)))" />
+				
 				<Loop>
 					<Break Condition = "producerIndex == myProducerCount._My_val" />
 					<Loop>
 						<Exec>
 							sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)
 						</Exec>
-						<Break Condition = "((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2))) == 0)"/>
+						<Break Condition = "pBuffer->myNext.myPtr == 0"/>
 						<Exec>
-							pBuffer = ((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))
+							pBuffer = pBuffer->myNext.myPtr
 						</Exec>
 					</Loop>
 					<Exec>
 						++producerIndex
 					</Exec>
 					<Exec>
-						pBuffer = ((myDebugView[producerIndex].myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(myDebugView[producerIndex].myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)myDebugView[producerIndex].myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))
+						pBuffer =
+						(*((buffer_type**)
+						(
+						+8
+						+ ((myDebugView[producerIndex].myDebugView.myU64 >> 1) * 2)
+						- ((uint64_t)myDebugView[producerIndex].myDebugView.myU8[aspdetail::STORAGE_BYTE_VERSION] * (aspdetail::Ptr_Mask + 1))
+						- ((uint64_t)myDebugView[producerIndex].myDebugView.myU8[aspdetail::STORAGE_BYTE_COPYREQUEST] * (aspdetail::Ptr_Mask + 1))
+						)))
 					</Exec>
 				</Loop>
 				<Item Name = "[size]">sizeAccumulator</Item>
@@ -45,8 +59,8 @@
 
 				<Loop>
 					<Exec>sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)</Exec>
-					<Break Condition="((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2))) == 0)" />
-					<Exec>pBuffer = ((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))</Exec>
+					<Break Condition="(pBuffer->myNext.myPtr == nullptr)" />
+					<Exec>pBuffer = pBuffer->myNext.myPtr</Exec>
 				</Loop>
 
 				<Item Name="[size]">sizeAccumulator</Item>
@@ -55,8 +69,8 @@
 
 				<Loop>
 					<If Condition="itemCount == (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
-						<Break Condition="((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2))) == 0)" />
-						<Exec>pBuffer = ((pBuffer->myNext.myDebugView.myQWords[STORAGE_QWORD_OBJECTPTR] ) - ((((uint8_t)(pBuffer->myNext.myDebugView.myBytes[STORAGE_QWORD_OBJECTPTR * 8] * 128)) == 128) ? 1 : 0) - ((uint64_t)pBuffer->myNext.myDebugView.myWords[STORAGE_WORD_VERSION] * (gdul::aspdetail::Ptr_Mask + 2)))</Exec>
+						<Break Condition="pBuffer->myNext.myPtr == nullptr" />
+						<Exec>pBuffer = pBuffer->myNext.myPtr</Exec>
 						<Exec>pItem = pBuffer->myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))</Exec>
 						<Exec>itemCount = 0</Exec>
 					</If>
