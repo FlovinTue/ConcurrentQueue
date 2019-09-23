@@ -8,3 +8,4 @@ Features optional basic exception safety at the cost of a slight performance dec
 
 
 Includes needed are concurrent_queue.h and atomic_shared_ptr.h @ https://github.com/FlovinTue/atomic_shared_ptr 
+concurrent_queue.natvis and atomic_shared_ptr.natvis may be included for additional debug information in Visual Studio
