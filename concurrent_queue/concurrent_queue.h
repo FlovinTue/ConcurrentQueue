@@ -128,7 +128,8 @@ class concurrent_queue
 {
 public:
 	typedef std::size_t size_type;
-	using allocator_type = typename std::allocator_traits<Allocator>::template rebind_alloc<uint8_t>;
+	//using allocator_type = typename std::allocator_traits<Allocator>::template rebind_alloc<uint8_t>;
+	typedef Allocator allocator_type;
 
 	inline concurrent_queue();
 	inline concurrent_queue(Allocator allocator);
@@ -752,11 +753,11 @@ inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T
 	, myPreReadIterator(0)
 	, myWriteSlot(0)
 	, myPostWriteIterator(0)
+	, myNextState(false)
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	, myFailiureIndex(0)
 	, myFailiureCount(0)
 	, myPostReadIterator(0)
-	, myNextState(false)
 #endif
 {
 }
