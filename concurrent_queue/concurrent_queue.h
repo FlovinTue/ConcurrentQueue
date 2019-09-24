@@ -275,12 +275,10 @@ inline void concurrent_queue<T, Allocator>::push_internal(Arg&& ...in)
 {
 	shared_ptr_slot_type& producer(this_producer());
 
-	buffer_type* buffer(producer.get_owned());
-
-	if (!buffer->try_push(std::forward<Arg>(in)...)) {
-		if (buffer->is_valid()) {
-			shared_ptr_slot_type next(create_producer_buffer(std::size_t(buffer->get_capacity()) * 2));
-			buffer->push_front(next);
+	if (!producer->try_push(std::forward<Arg>(in)...)) {
+		if (producer->is_valid()) {
+			shared_ptr_slot_type next(create_producer_buffer(std::size_t(producer->get_capacity()) * 2));
+			producer->push_front(next);
 			producer = std::move(next);
 		}
 		else {
