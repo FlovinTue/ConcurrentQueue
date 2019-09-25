@@ -31,8 +31,8 @@ public:
 };
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 1;
-const uint32_t Readers = 1;
+const uint32_t Writers = 4;
+const uint32_t Readers = 4;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -67,8 +67,8 @@ private:
 template<class T, class Allocator>
 inline Tester<T, Allocator>::Tester(Allocator& alloc) :
 	myIsRunning(false),
-	myWriter(Writers, 0),
-	myReader(Readers, Writers),
+	myWriter(Writers),
+	myReader(Readers),
 	myWrittenSum(0),
 	myReadSum(0),
 	myThrown(0),
