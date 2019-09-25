@@ -67,8 +67,8 @@ private:
 template<class T, class Allocator>
 inline Tester<T, Allocator>::Tester(Allocator& alloc) :
 	myIsRunning(false),
-	myWriter(Writers),
-	myReader(Readers),
+	myWriter(Writers, 0),
+	myReader(Readers, Writers),
 	myWrittenSum(0),
 	myReadSum(0),
 	myThrown(0),
