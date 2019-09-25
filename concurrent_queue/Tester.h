@@ -4,6 +4,31 @@
 #include "ThreadPool.h"
 #include "concurrent_queue.h"
 #include "Timer.h"
+#include <concurrent_queue.h>
+#include <queue>
+#include <mutex>
+
+template <class T>
+class queue_mutex_wrapper
+{
+public:
+
+	bool try_pop(T& out){
+		mtx.lock();
+		if (myQueue.empty()) {
+			mtx.unlock();
+			return false;
+		}
+		out = myQueue.front();
+		myQueue.pop();
+		mtx.unlock();
+		return true;
+	}
+	void push(T& in) { mtx.lock(); myQueue.push(in); mtx.unlock(); }
+
+	std::mutex mtx;
+	std::queue<T> myQueue;
+};
 
 const uint32_t Writes = 2048;
 const uint32_t Writers = 4;
@@ -27,8 +52,11 @@ private:
 	void Read();
 
 	gdul::concurrent_queue<T, Allocator> myQueue;
+	//concurrency::concurrent_queue<T> myQueue;
+	//queue_mutex_wrapper<T> myQueue;
 
-	ThreadPool myWorker;
+	ThreadPool myWriter;
+	ThreadPool myReader;
 
 	std::atomic<bool> myIsRunning;
 	std::atomic<uint32_t> myWrittenSum;
@@ -39,7 +67,8 @@ private:
 template<class T, class Allocator>
 inline Tester<T, Allocator>::Tester(Allocator& alloc) :
 	myIsRunning(false),
-	myWorker(Writers + Readers),
+	myWriter(Writers),
+	myReader(Readers),
 	myWrittenSum(0),
 	myReadSum(0),
 	myThrown(0),
@@ -51,7 +80,8 @@ inline Tester<T, Allocator>::Tester(Allocator& alloc) :
 template<class T, class Allocator>
 inline Tester<T, Allocator>::~Tester()
 {
-	myWorker.Decommission();
+	myWriter.Decommission();
+	myReader.Decommission();
 }
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
@@ -61,9 +91,9 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 	for (uint32_t i = 0; i < aRuns; ++i) {
 
 		for (uint32_t j = 0; j < Writers; ++j)
-			myWorker.AddTask(std::bind(&Tester::Write, this));
+			myWriter.AddTask(std::bind(&Tester::Write, this));
 		for (uint32_t j = 0; j < Readers; ++j)
-			myWorker.AddTask(std::bind(&Tester::Read, this));
+			myReader.AddTask(std::bind(&Tester::Read, this));
 
 		myWrittenSum = 0;
 		myReadSum = 0;
@@ -72,8 +102,8 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 		Timer timer;
 		myIsRunning = true;
 
-		while (myWorker.HasUnfinishedTasks())
-			std::this_thread::yield();
+		while (myWriter.HasUnfinishedTasks() | myReader.HasUnfinishedTasks())
+			std::this_thread::sleep_for(std::chrono::microseconds(10));
 
 		myQueue.unsafe_clear();
 
@@ -121,7 +151,9 @@ inline void Tester<T, Allocator>::Write()
 	}
 #else
 	for (int j = 0; j < WritesPerThread; ++j) {
-		T in(1);
+		//T in(1);
+		T in;
+		in.count = 1;
 		myQueue.push(in);
 		sum += in.count;
 	}
@@ -156,6 +188,9 @@ inline void Tester<T, Allocator>::Read()
 			if (myQueue.try_pop(out)) {
 				sum += out.count;
 				break;
+			}
+			else {
+				std::this_thread::yield();
 			}
 		}
 	}

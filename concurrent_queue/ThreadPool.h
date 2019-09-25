@@ -3,6 +3,7 @@
 #include <functional>
 #include <thread>
 #include <atomic>
+#include "concurrent_queue.h"
 #include <concurrent_queue.h>
 #include <vector>
 
@@ -21,8 +22,7 @@ private:
 
 	std::vector<std::thread> myThreads;
 
-	concurrency::concurrent_queue<std::function<void()>> myTaskQueue;
-	//ConcurrentQueue<std::function<void()>> myTaskQueue;
+	gdul::concurrent_queue<std::function<void()>> myTaskQueue;
 
 	std::atomic<bool> myIsInCommission;
 
