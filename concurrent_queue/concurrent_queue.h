@@ -963,6 +963,10 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myPreReadIterator.store(myPostWriteIterator.load(std::memory_order_relaxed), std::memory_order_relaxed);
 	myReadSlot.store(myPostWriteIterator.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
+	for (size_type i = 0; i < myCapacity; ++i) {
+		myDataBlock[i].set_state_local(item_state::Empty);
+	}
+
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myFailiureCount.store(0, std::memory_order_relaxed);
 	myFailiureIndex.store(0, std::memory_order_relaxed);

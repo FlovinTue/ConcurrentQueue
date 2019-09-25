@@ -31,8 +31,8 @@ public:
 };
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 4;
-const uint32_t Readers = 4;
+const uint32_t Writers = 1;
+const uint32_t Readers = 1;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -67,8 +67,8 @@ private:
 template<class T, class Allocator>
 inline Tester<T, Allocator>::Tester(Allocator& alloc) :
 	myIsRunning(false),
-	myWriter(Writers),
-	myReader(Readers),
+	myWriter(Writers, 0),
+	myReader(Readers, Writers),
 	myWrittenSum(0),
 	myReadSum(0),
 	myThrown(0),
@@ -103,9 +103,10 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 		myIsRunning = true;
 
 		while (myWriter.HasUnfinishedTasks() | myReader.HasUnfinishedTasks())
-			std::this_thread::sleep_for(std::chrono::microseconds(10));
+			std::this_thread::yield();
 
 		myQueue.unsafe_clear();
+		//myQueue.clear();
 
 		result += timer.GetTotalTime();
 

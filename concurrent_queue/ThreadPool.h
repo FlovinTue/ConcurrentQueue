@@ -10,7 +10,7 @@
 class ThreadPool
 {
 public:
-	ThreadPool(uint32_t aThreads = std::thread::hardware_concurrency());
+	ThreadPool(uint32_t aThreads = std::thread::hardware_concurrency(), uint32_t affinityBegin = 0);
 	~ThreadPool();
 
 	void AddTask(std::function<void()> aWorkFunction);
@@ -18,7 +18,7 @@ public:
 
 	bool HasUnfinishedTasks() const;
 private:
-	void Idle();
+	void Idle(uint64_t affinityMask);
 
 	std::vector<std::thread> myThreads;
 
