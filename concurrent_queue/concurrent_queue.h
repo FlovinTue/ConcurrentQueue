@@ -289,12 +289,10 @@ template<class T, class Allocator>
 template<class ...Arg>
 inline void concurrent_queue<T, Allocator>::push_internal(Arg&& ...in)
 {
-	buffer_type* const producer(this_producer_cached());
-
-	if (!producer->try_push(std::forward<Arg>(in)...)) {
-		if (producer->is_valid()) {
-			shared_ptr_slot_type next(create_producer_buffer(std::size_t(producer->get_capacity()) * 2));
-			producer->push_front(next);
+	if (!this_producer_cached()->try_push(std::forward<Arg>(in)...)) {
+		if (this_producer_cached()->is_valid()) {
+			shared_ptr_slot_type next(create_producer_buffer(std::size_t(this_producer_cached()->get_capacity()) * 2));
+			this_producer_cached()->push_front(next);
 			this_producer() = std::move(next);
 		}
 		else {
@@ -322,9 +320,9 @@ bool concurrent_queue<T, Allocator>::try_pop(T & out)
 		}
 	}
 
-	//if (!(++consumer.myPopCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
-	//	relocate_consumer();
-	//}
+	if (!(++ourLastConsumerCache.myCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
+		relocate_consumer();
+	}
 
 	return true;
 }
@@ -381,7 +379,7 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 {
 	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 	if (producers == 1) {
-		if (this_consumer_cached()->is_valid())
+		if (this_consumer_cached() != &ourDummyContainer.myDummyRawBuffer)
 			return false;
 	}
 
@@ -706,7 +704,7 @@ inline cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::share
 template<class T, class Allocator>
 inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::this_producer_cached()
 {
-	if (ourLastProducerCache.myAddr != this) {
+	if ((ourLastProducerCache.myAddrBlock & aspdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
 		refresh_cached_producer();
 	}
 	return ourLastProducerCache.myBuffer;
@@ -715,7 +713,7 @@ inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::
 template<class T, class Allocator>
 inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::this_consumer_cached()
 {
-	if (ourLastConsumerCache.myAddr != this) {
+	if ((ourLastConsumerCache.myAddrBlock & aspdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
 		refresh_cached_consumer();
 	}
 	return ourLastConsumerCache.myBuffer;

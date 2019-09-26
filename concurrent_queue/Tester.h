@@ -90,14 +90,14 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 
 	for (uint32_t i = 0; i < aRuns; ++i) {
 
-		for (uint32_t j = 0; j < Writers; ++j)
-			myWriter.AddTask(std::bind(&Tester::Write, this));
-		//for (uint32_t j = 0; j < Readers; ++j)
-		//	myReader.AddTask(std::bind(&Tester::Read, this));
-		//myQueue.reserve(Writes);
-		//for (uint32_t j = 0; j < Writes; ++j) {
-		//	myQueue.push(T());
-		//}
+		//for (uint32_t j = 0; j < Writers; ++j)
+		//	myWriter.AddTask(std::bind(&Tester::Write, this));
+		for (uint32_t j = 0; j < Readers; ++j)
+			myReader.AddTask(std::bind(&Tester::Read, this));
+		myQueue.reserve(Writes);
+		for (uint32_t j = 0; j < Writes; ++j) {
+			myQueue.push(T());
+		}
 
 		myWrittenSum = 0;
 		myReadSum = 0;
