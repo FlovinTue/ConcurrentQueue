@@ -76,6 +76,9 @@ public:
 	producer_overflow(const char* errorMessage) : runtime_error(errorMessage) {}
 };
 
+template <class T, class Allocator>
+struct accessor_cache;
+
 template <class SharedPtrSlotType, class SharedPtrArrayType>
 struct consumer_wrapper;
 
@@ -193,14 +196,23 @@ private:
 	inline shared_ptr_slot_type fetch_from_store(uint16_t bufferSlot);
 	inline bool insert_to_store(shared_ptr_slot_type buffer, uint16_t bufferSlot, uint16_t storeSlot);
 	inline void kill_store_array_below(uint16_t belowSlot, bool doInvalidate = false);
+
 	inline shared_ptr_slot_type& this_producer();
 	inline cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>& this_consumer();
+	inline buffer_type* this_producer_cached();
+	inline buffer_type* this_consumer_cached();
+
+	inline void refresh_cached_consumer();
+	inline void refresh_cached_producer();
 
 	const size_type myInitBufferCapacity;
 	const size_type myInstanceIndex;
 
 	static thread_local std::vector<shared_ptr_slot_type, vector_allocator> ourProducers;
 	static thread_local std::vector<cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>, vector_allocator> ourConsumers;
+
+	static thread_local cqdetail::accessor_cache<T, Allocator> ourLastConsumerCache;
+	static thread_local cqdetail::accessor_cache<T, Allocator> ourLastProducerCache;
 
 	static cqdetail::index_pool<size_type, allocator_type> ourIndexPool;
 	static cqdetail::dummy_container<T, allocator_type> ourDummyContainer;
@@ -277,36 +289,42 @@ template<class T, class Allocator>
 template<class ...Arg>
 inline void concurrent_queue<T, Allocator>::push_internal(Arg&& ...in)
 {
-	shared_ptr_slot_type& producer(this_producer());
+	buffer_type* const producer(this_producer_cached());
 
 	if (!producer->try_push(std::forward<Arg>(in)...)) {
 		if (producer->is_valid()) {
 			shared_ptr_slot_type next(create_producer_buffer(std::size_t(producer->get_capacity()) * 2));
 			producer->push_front(next);
-			producer = std::move(next);
+			this_producer() = std::move(next);
 		}
 		else {
 			init_producer(myInitBufferCapacity);
 		}
-		producer->try_push(std::forward<Arg>(in)...);
+
+		refresh_cached_producer();
+
+		this_producer_cached()->try_push(std::forward<Arg>(in)...);
 	}
 }
 template<class T, class Allocator>
 bool concurrent_queue<T, Allocator>::try_pop(T & out)
 {
-	cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>& consumer(this_consumer());
+	if (!this_consumer_cached()->try_pop(out)) {
+		const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 
-	for (uint16_t attempt(0), producerCount(myProducerCount.load(std::memory_order_acquire)); !consumer.myBuffer->try_pop(out); ++attempt) {
-		if (!(attempt < producerCount))
-			return false;
-
-		if (!relocate_consumer())
-			return false;
+		for (uint16_t retry(0); retry < producers; ++retry) {
+			if (!relocate_consumer()) {
+				return false;
+			}
+			if (this_consumer_cached()->try_pop(out)) {
+				break;
+			}
+		}
 	}
 
-	if (!(++consumer.myPopCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
-		relocate_consumer();
-	}
+	//if (!(++consumer.myPopCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
+	//	relocate_consumer();
+	//}
 
 	return true;
 }
@@ -317,14 +335,14 @@ inline void concurrent_queue<T, Allocator>::reserve(typename concurrent_queue<T,
 
 	if (!producer->is_valid()) {
 		init_producer(capacity);
-		return;
 	}
-	if (producer->get_capacity() < capacity) {
+	else if (producer->get_capacity() < capacity) {
 		const size_type alignedCapacity(cqdetail::log2_align<void>(capacity, Buffer_Capacity_Max));
 		shared_ptr_slot_type buffer(create_producer_buffer(alignedCapacity));
 		producer->push_front(buffer);
 		producer = std::move(buffer);
 	}
+	refresh_cached_producer();
 }
 template<class T, class Allocator>
 inline void concurrent_queue<T, Allocator>::unsafe_clear()
@@ -361,8 +379,13 @@ inline void concurrent_queue<T, Allocator>::init_producer(typename concurrent_qu
 template<class T, class Allocator>
 inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 {
-	const uint16_t relocation(ourRelocationIndex.fetch_add(1, std::memory_order_acq_rel));
 	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
+	if (producers == 1) {
+		if (this_consumer_cached()->is_valid())
+			return false;
+	}
+
+	const uint16_t relocation(ourRelocationIndex.fetch_add(1, std::memory_order_acq_rel));
 	const uint16_t maxVisited(producers - static_cast<bool>(producers) + !(producers - static_cast<bool>(producers)));
 
 	cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>& consumer(this_consumer());
@@ -392,6 +415,8 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 
 		consumer.myBuffer = std::move(producerBuffer);
 		consumer.myPopCounter = 0;
+
+		refresh_cached_consumer();
 
 		return true;
 	}
@@ -669,7 +694,6 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type & concurren
 	}
 	return ourProducers[myInstanceIndex];
 }
-
 template<class T, class Allocator>
 inline cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_slot_type, typename concurrent_queue<T, Allocator>::shared_ptr_array_type>& concurrent_queue<T, Allocator>::this_consumer()
 {
@@ -677,6 +701,38 @@ inline cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::share
 		ourConsumers.resize(myInstanceIndex + 1, cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>(ourDummyContainer.myDummyBuffer));
 	}
 	return ourConsumers[myInstanceIndex];
+}
+
+template<class T, class Allocator>
+inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::this_producer_cached()
+{
+	if (ourLastProducerCache.myAddr != this) {
+		refresh_cached_producer();
+	}
+	return ourLastProducerCache.myBuffer;
+}
+
+template<class T, class Allocator>
+inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::this_consumer_cached()
+{
+	if (ourLastConsumerCache.myAddr != this) {
+		refresh_cached_consumer();
+	}
+	return ourLastConsumerCache.myBuffer;
+}
+
+template<class T, class Allocator>
+inline void concurrent_queue<T, Allocator>::refresh_cached_consumer()
+{
+	ourLastConsumerCache.myBuffer = static_cast<buffer_type*>(this_consumer().myBuffer);
+	ourLastConsumerCache.myAddr = this;
+}
+
+template<class T, class Allocator>
+inline void concurrent_queue<T, Allocator>::refresh_cached_producer()
+{
+	ourLastProducerCache.myBuffer = static_cast<buffer_type*>(this_producer());
+	ourLastProducerCache.myAddr = this;
 }
 
 namespace cqdetail
@@ -1383,14 +1439,16 @@ constexpr std::size_t aligned_size(std::size_t byteSize, std::size_t align)
 template <class SharedPtrSlotType, class SharedPtrArrayType>
 struct consumer_wrapper
 {
+	typedef typename concurrent_queue<uint8_t>::size_type size_type;
+
 	consumer_wrapper(SharedPtrSlotType buffer)
 		: myBuffer(std::move(buffer))
 		, myPopCounter(0)
 	{
 	}
+
 	SharedPtrSlotType myBuffer;
 	SharedPtrArrayType myLastKnownArray;
-
 	uint16_t myPopCounter;
 };
 template <class T, class Allocator>
@@ -1432,6 +1490,22 @@ private:
 	std::size_t mySize;
 };
 template <class T, class Allocator>
+struct accessor_cache
+{
+	producer_buffer<T, Allocator>* myBuffer;
+
+	union
+	{
+		void* myAddr;
+		uint64_t myAddrBlock;
+		struct
+		{
+			uint16_t padding[3];
+			uint16_t myCounter;
+		};
+	};
+};
+template <class T, class Allocator>
 class dummy_container
 {
 public:
@@ -1441,11 +1515,10 @@ public:
 	typedef typename concurrent_queue<T, Allocator>::buffer_type buffer_type;
 	typedef typename concurrent_queue<T, Allocator>::allocator_type allocator_type;
 
-private:
+
+	dummy_type myDummyBuffer;
 	item_container<T> myDummyItem;
 	producer_buffer<T, allocator_type> myDummyRawBuffer;
-public:
-	dummy_type myDummyBuffer;
 };
 template <class IndexType, class Allocator>
 class index_pool
@@ -1571,5 +1644,9 @@ template <class T, class Allocator>
 cqdetail::dummy_container<T, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourDummyContainer;
 template <class T, class Allocator>
 std::atomic<uint16_t> concurrent_queue<T, Allocator>::ourRelocationIndex(0);
+template <class T, class Allocator>
+thread_local cqdetail::accessor_cache<T, Allocator> concurrent_queue<T, Allocator>::ourLastConsumerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
+template <class T, class Allocator>
+thread_local cqdetail::accessor_cache<T, Allocator> concurrent_queue<T, Allocator>::ourLastProducerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
 }
 #pragma warning(pop)

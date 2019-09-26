@@ -31,8 +31,8 @@ public:
 };
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 4;
-const uint32_t Readers = 4;
+const uint32_t Writers = 1;
+const uint32_t Readers = 1;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -92,8 +92,12 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 
 		for (uint32_t j = 0; j < Writers; ++j)
 			myWriter.AddTask(std::bind(&Tester::Write, this));
-		for (uint32_t j = 0; j < Readers; ++j)
-			myReader.AddTask(std::bind(&Tester::Read, this));
+		//for (uint32_t j = 0; j < Readers; ++j)
+		//	myReader.AddTask(std::bind(&Tester::Read, this));
+		//myQueue.reserve(Writes);
+		//for (uint32_t j = 0; j < Writes; ++j) {
+		//	myQueue.push(T());
+		//}
 
 		myWrittenSum = 0;
 		myReadSum = 0;

@@ -22,7 +22,7 @@ private:
 
 	std::vector<std::thread> myThreads;
 
-	gdul::concurrent_queue<std::function<void()>> myTaskQueue;
+	concurrency::concurrent_queue<std::function<void()>> myTaskQueue;
 
 	std::atomic<bool> myIsInCommission;
 
