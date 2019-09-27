@@ -139,8 +139,8 @@ class concurrent_queue
 {
 public:
 	typedef std::size_t size_type;
-	//using allocator_type = typename std::allocator_traits<Allocator>::template rebind_alloc<uint8_t>;
-	typedef Allocator allocator_type;
+	using allocator_type = typename std::allocator_traits<Allocator>::template rebind_alloc<uint8_t>;
+	//typedef Allocator allocator_type;
 
 	inline concurrent_queue();
 	inline concurrent_queue(Allocator allocator);
@@ -212,8 +212,8 @@ private:
 	static thread_local std::vector<shared_ptr_slot_type, vector_allocator> ourProducers;
 	static thread_local std::vector<cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>, vector_allocator> ourConsumers;
 
-	static thread_local cqdetail::accessor_cache<T, Allocator> ourLastConsumerCache;
-	static thread_local cqdetail::accessor_cache<T, Allocator> ourLastProducerCache;
+	static thread_local cqdetail::accessor_cache<T, allocator_type> ourLastConsumerCache;
+	static thread_local cqdetail::accessor_cache<T, allocator_type> ourLastProducerCache;
 
 	static cqdetail::index_pool<size_type, allocator_type> ourIndexPool;
 	static cqdetail::dummy_container<T, allocator_type> ourDummyContainer;
@@ -707,7 +707,7 @@ inline cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::share
 }
 
 template<class T, class Allocator>
-inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::this_producer_cached()
+inline typename concurrent_queue<T, Allocator>::buffer_type* concurrent_queue<T, Allocator>::this_producer_cached()
 {
 	if ((ourLastProducerCache.myAddrBlock & aspdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
 		refresh_cached_producer();
@@ -716,7 +716,7 @@ inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::
 }
 
 template<class T, class Allocator>
-inline cqdetail::producer_buffer<T, Allocator>* concurrent_queue<T, Allocator>::this_consumer_cached()
+inline typename concurrent_queue<T, Allocator>::buffer_type* concurrent_queue<T, Allocator>::this_consumer_cached()
 {
 	if ((ourLastConsumerCache.myAddrBlock & aspdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
 		refresh_cached_consumer();
@@ -1646,8 +1646,8 @@ thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T,
 template <class T, class Allocator>
 cqdetail::dummy_container<T, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourDummyContainer;
 template <class T, class Allocator>
-thread_local cqdetail::accessor_cache<T, Allocator> concurrent_queue<T, Allocator>::ourLastConsumerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
+thread_local cqdetail::accessor_cache<T, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourLastConsumerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
 template <class T, class Allocator>
-thread_local cqdetail::accessor_cache<T, Allocator> concurrent_queue<T, Allocator>::ourLastProducerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
+thread_local cqdetail::accessor_cache<T, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourLastProducerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
 }
 #pragma warning(pop)
