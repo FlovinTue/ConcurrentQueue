@@ -140,7 +140,6 @@ class concurrent_queue
 public:
 	typedef std::size_t size_type;
 	using allocator_type = typename std::allocator_traits<Allocator>::template rebind_alloc<uint8_t>;
-	//typedef Allocator allocator_type;
 
 	inline concurrent_queue();
 	inline concurrent_queue(Allocator allocator);
