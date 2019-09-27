@@ -37,7 +37,7 @@ void ThreadPool::Decommission()
 
 bool ThreadPool::HasUnfinishedTasks() const
 {
-	return 0 < myTaskCounter._My_val;
+	return 0 < myTaskCounter.load(std::memory_order_acquire);
 }
 void ThreadPool::Idle(uint64_t affinityMask)
 {
@@ -48,7 +48,7 @@ void ThreadPool::Idle(uint64_t affinityMask)
 	} while (!result);
 	
 
-	while (myIsInCommission._My_val | (0 < myTaskCounter._My_val))
+	while (myIsInCommission._My_val | (0 < myTaskCounter.load(std::memory_order_acquire)))
 	{
 		std::function<void()> task;
 		if (myTaskQueue.try_pop(task))

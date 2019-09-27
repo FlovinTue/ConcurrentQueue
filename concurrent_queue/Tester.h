@@ -80,7 +80,11 @@ private:
 };
 
 template<class T, class Allocator>
-inline Tester<T, Allocator>::Tester(Allocator& alloc) :
+inline Tester<T, Allocator>::Tester(Allocator& 
+#ifdef GDUL	
+	alloc
+#endif
+) :
 	myIsRunning(false),
 	myWriter(Writers, 0),
 	myReader(Readers, Writers),
@@ -161,10 +165,10 @@ inline void Tester<T, Allocator>::Write()
 	uint32_t sum(0);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	for (int j = 0; j < WritesPerThread; ) {
-		const T in(rand());
+	for (uint32_t j = 0; j < WritesPerThread; ) {
+		T in(1);
 		try {
-			myQueue.push(in);
+			myQueue.push(std::move(in));
 			++j;
 			sum += in.count;
 		}
@@ -175,15 +179,16 @@ inline void Tester<T, Allocator>::Write()
 #else
 	for (uint32_t j = 0; j < WritesPerThread; ++j) {
 		T in;
-		in.count = 1;
-#endif
+		in.count = j;
+		sum += in.count;
 #ifndef MOODYCAMEL
 		myQueue.push(in);
 #else
 		myQueue.enqueue(in);
 #endif
-		sum += in.count;
 	}
+#endif
+	
 	myWrittenSum += sum;
 }
 
@@ -194,17 +199,20 @@ inline void Tester<T, Allocator>::Read()
 
 	uint32_t sum(0);
 
-	T out;
+	T out{0};
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	for (int j = 0; j < ReadsPerThread;) {
-		try {
-			if (myQueue.try_pop(out)) {
-				++j;
-				sum += out.count;
+	for (uint32_t j = 0; j < ReadsPerThread;) {
+		while (true) {
+			try {
+				if (myQueue.try_pop(out)) {
+					++j;
+					sum += out.count;
+					break;
+				}
 			}
-		}
-		catch (...) {
-			++myThrown;
+			catch (...) {
+				++myThrown;
+			}
 		}
 	}
 

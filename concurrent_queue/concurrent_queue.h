@@ -313,20 +313,21 @@ bool concurrent_queue<T, Allocator>::try_pop(T & out)
 	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 
 	if (!this_consumer_cached()->try_pop(out)) {
-		for (uint16_t retry(0); retry < producers; ++retry) {
+		uint16_t retry(0);
+		do {
+			if (!(retry++ < producers)) {
+				return false;
+			}
 			if (!relocate_consumer()) {
 				return false;
 			}
-			if (this_consumer_cached()->try_pop(out)) {
-				break;
-			}
-		}
+		} while (!this_consumer_cached()->try_pop(out));
 	}
 
 	if ((1 < producers) & !(++ourLastConsumerCache.myCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
 		relocate_consumer();
 	}
-
+	
 	return true;
 }
 template<class T, class Allocator>
