@@ -7,6 +7,15 @@
 #include <concurrent_queue.h>
 #include <queue>
 #include <mutex>
+#include <concurrentqueue.h>
+
+
+// Test queue
+
+#define GDUL
+//#define MOODYCAMEL
+//#define MSC_RUNTIME
+//#define MTX_WRAPPER
 
 template <class T>
 class queue_mutex_wrapper
@@ -31,8 +40,8 @@ public:
 };
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = 4;
-const uint32_t Readers = 4;
+const uint32_t Writers = std::thread::hardware_concurrency() / 2;
+const uint32_t Readers = std::thread::hardware_concurrency() / 2;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -51,9 +60,15 @@ private:
 	void Write();
 	void Read();
 
+#ifdef GDUL
 	gdul::concurrent_queue<T, Allocator> myQueue;
-	//concurrency::concurrent_queue<T> myQueue;
-	//queue_mutex_wrapper<T> myQueue;
+#elif defined(MSC_RUNTIME)
+	concurrency::concurrent_queue<T> myQueue;
+#elif defined(MOODYCAMEL)
+	moodycamel::ConcurrentQueue<T> myQueue;
+#elif defined(MTX_WRAPPER)
+	queue_mutex_wrapper<T> myQueue;
+#endif
 
 	ThreadPool myWriter;
 	ThreadPool myReader;
@@ -71,8 +86,10 @@ inline Tester<T, Allocator>::Tester(Allocator& alloc) :
 	myReader(Readers, Writers),
 	myWrittenSum(0),
 	myReadSum(0),
-	myThrown(0),
-	myQueue(alloc)
+	myThrown(0)
+#ifdef GDUL
+	, myQueue(alloc)
+#endif
 {
 	srand(static_cast<uint32_t>(time(0)));
 }
@@ -94,10 +111,6 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 			myWriter.AddTask(std::bind(&Tester::Write, this));
 		for (uint32_t j = 0; j < Readers; ++j)
 			myReader.AddTask(std::bind(&Tester::Read, this));
-		//myQueue.reserve(Writes);
-		//for (uint32_t j = 0; j < Writes; ++j) {
-		//	myQueue.push(T());
-		//}
 
 		myWrittenSum = 0;
 		myReadSum = 0;
@@ -109,8 +122,11 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 		while (myWriter.HasUnfinishedTasks() | myReader.HasUnfinishedTasks())
 			std::this_thread::yield();
 
+#ifdef GDUL
 		myQueue.unsafe_clear();
-		//myQueue.clear();
+#elif defined(MSC_RUNTIME)
+		myQueue.clear();
+#endif
 
 		result += timer.GetTotalTime();
 
@@ -136,7 +152,9 @@ inline bool Tester<T, Allocator>::CheckResults() const
 template<class T, class Allocator>
 inline void Tester<T, Allocator>::Write()
 {
+#ifdef GDUL
 	myQueue.reserve(WritesPerThread);
+#endif
 
 	while (!myIsRunning);
 
@@ -155,14 +173,17 @@ inline void Tester<T, Allocator>::Write()
 		}
 	}
 #else
-	for (int j = 0; j < WritesPerThread; ++j) {
-		//T in(1);
+	for (uint32_t j = 0; j < WritesPerThread; ++j) {
 		T in;
 		in.count = 1;
+#endif
+#ifndef MOODYCAMEL
 		myQueue.push(in);
+#else
+		myQueue.enqueue(in);
+#endif
 		sum += in.count;
 	}
-#endif
 	myWrittenSum += sum;
 }
 
@@ -188,9 +209,13 @@ inline void Tester<T, Allocator>::Read()
 	}
 
 #else
-	for (int j = 0; j < ReadsPerThread; ++j) {
+	for (uint32_t j = 0; j < ReadsPerThread; ++j) {
 		while (true) {
+#ifndef MOODYCAMEL
 			if (myQueue.try_pop(out)) {
+#else
+				if (myQueue.try_dequeue(out)) {
+#endif
 				sum += out.count;
 				break;
 			}

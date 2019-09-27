@@ -199,6 +199,7 @@ private:
 
 	inline shared_ptr_slot_type& this_producer();
 	inline cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>& this_consumer();
+
 	inline buffer_type* this_producer_cached();
 	inline buffer_type* this_consumer_cached();
 
@@ -217,11 +218,10 @@ private:
 	static cqdetail::index_pool<size_type, allocator_type> ourIndexPool;
 	static cqdetail::dummy_container<T, allocator_type> ourDummyContainer;
 
-	static std::atomic<uint16_t> ourRelocationIndex;
-
 	atomic_shared_ptr_array_type myProducerArrayStore[cqdetail::Producer_Slots_Max_Growth_Count];
 	atomic_shared_ptr_array_type myProducerSlots;
 
+	std::atomic<uint16_t> myRelocationIndex;
 	std::atomic<uint16_t> myProducerCount;
 	std::atomic<uint16_t> myProducerCapacity;
 	std::atomic<uint16_t> myProducerSlotReservation;
@@ -256,6 +256,7 @@ inline concurrent_queue<T, Allocator>::concurrent_queue(size_type initProducerCa
 	, myInitBufferCapacity(cqdetail::log2_align<void>(initProducerCapacity, Buffer_Capacity_Max))
 	, myProducerArrayStore{ nullptr }
 	, myAllocator(allocator)
+	, myRelocationIndex(0)
 {
 }
 template<class T, class Allocator>
@@ -289,10 +290,12 @@ template<class T, class Allocator>
 template<class ...Arg>
 inline void concurrent_queue<T, Allocator>::push_internal(Arg&& ...in)
 {
-	if (!this_producer_cached()->try_push(std::forward<Arg>(in)...)) {
-		if (this_producer_cached()->is_valid()) {
-			shared_ptr_slot_type next(create_producer_buffer(std::size_t(this_producer_cached()->get_capacity()) * 2));
-			this_producer_cached()->push_front(next);
+	buffer_type* const cachedProducer(this_producer_cached());
+
+	if (!cachedProducer->try_push(std::forward<Arg>(in)...)) {
+		if (cachedProducer->is_valid()) {
+			shared_ptr_slot_type next(create_producer_buffer(std::size_t(cachedProducer->get_capacity()) * 2));
+			cachedProducer->push_front(next);
 			this_producer() = std::move(next);
 		}
 		else {
@@ -307,9 +310,9 @@ inline void concurrent_queue<T, Allocator>::push_internal(Arg&& ...in)
 template<class T, class Allocator>
 bool concurrent_queue<T, Allocator>::try_pop(T & out)
 {
-	if (!this_consumer_cached()->try_pop(out)) {
-		const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
+	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 
+	if (!this_consumer_cached()->try_pop(out)) {
 		for (uint16_t retry(0); retry < producers; ++retry) {
 			if (!relocate_consumer()) {
 				return false;
@@ -320,7 +323,7 @@ bool concurrent_queue<T, Allocator>::try_pop(T & out)
 		}
 	}
 
-	if (!(++ourLastConsumerCache.myCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
+	if ((1 < producers) & !(++ourLastConsumerCache.myCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
 		relocate_consumer();
 	}
 
@@ -379,11 +382,12 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 {
 	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 	if (producers == 1) {
-		if (this_consumer_cached() != &ourDummyContainer.myDummyRawBuffer)
+		if (this_consumer_cached() != &ourDummyContainer.myDummyRawBuffer) {
 			return false;
+		}
 	}
 
-	const uint16_t relocation(ourRelocationIndex.fetch_add(1, std::memory_order_acq_rel));
+	const uint16_t relocation(myRelocationIndex.fetch_add(1, std::memory_order_acq_rel));
 	const uint16_t maxVisited(producers - static_cast<bool>(producers) + !(producers - static_cast<bool>(producers)));
 
 	cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>& consumer(this_consumer());
@@ -1640,8 +1644,6 @@ template <class T, class Allocator>
 thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_slot_type, typename concurrent_queue<T, Allocator>::shared_ptr_array_type>, typename concurrent_queue<T, Allocator>::vector_allocator> concurrent_queue<T, Allocator>::ourConsumers;
 template <class T, class Allocator>
 cqdetail::dummy_container<T, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourDummyContainer;
-template <class T, class Allocator>
-std::atomic<uint16_t> concurrent_queue<T, Allocator>::ourRelocationIndex(0);
 template <class T, class Allocator>
 thread_local cqdetail::accessor_cache<T, Allocator> concurrent_queue<T, Allocator>::ourLastConsumerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
 template <class T, class Allocator>
