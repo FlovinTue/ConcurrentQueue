@@ -7,7 +7,7 @@
 #include <concurrent_queue.h>
 #include <queue>
 #include <mutex>
-#include <concurrentqueue.h>
+//#include <concurrentqueue.h>
 
 
 // Test queue
@@ -40,8 +40,8 @@ public:
 };
 
 const uint32_t Writes = 2048;
-const uint32_t Writers = std::thread::hardware_concurrency() / 2;
-const uint32_t Readers = std::thread::hardware_concurrency() / 2;
+const uint32_t Writers = 1; //std::thread::hardware_concurrency() / 2;
+const uint32_t Readers = 1; //std::thread::hardware_concurrency() / 2;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -157,7 +157,7 @@ template<class T, class Allocator>
 inline void Tester<T, Allocator>::Write()
 {
 #ifdef GDUL
-	myQueue.reserve(WritesPerThread);
+	//myQueue.reserve(WritesPerThread);
 #endif
 
 	while (!myIsRunning);

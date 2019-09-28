@@ -128,17 +128,23 @@ static const uint16_t Consumer_Force_Relocation_Pop_Count = 24;
 static constexpr uint8_t Producer_Slots_Max_Growth_Count = 15;
 
 static constexpr uint16_t Max_Producers = std::numeric_limits<int16_t>::max() - 1;
+
+typedef std::size_t size_type;
+
+// Not quite size_type max because we need some leaway in case we
+// need to throw consumers out of a buffer whilst repairing it
+static constexpr size_type Buffer_Capacity_Max = ~(std::numeric_limits<size_type>::max() >> 3) / 2;
 }
-// The WizardLoaf MPMC unbounded concurrent_queue.
-// FIFO is respected within the context of single producers. push operations are wait-free
-// (assuming pre-allocated memory using reserve() alt. a wait-free allocator), try_pop & 
-// size are lock-free. Basic exception safety may be enabled via define CQ_ENABLE_EXCEPTIONHANDLING 
+// The WizardLoaf MPMC unbounded lock-free queue.
+// FIFO is respected within the context of single producers. 
+// Basic exception safety may be enabled via define CQ_ENABLE_EXCEPTIONHANDLING 
 // at the price of a slight performance decrease.
 template <class T, class Allocator = std::allocator<uint8_t>>
 class concurrent_queue
 {
 public:
-	typedef std::size_t size_type;
+	typedef cqdetail::size_type size_type;
+
 	using allocator_type = typename std::allocator_traits<Allocator>::template rebind_alloc<uint8_t>;
 
 	inline concurrent_queue();
@@ -159,10 +165,6 @@ public:
 
 	// size hint
 	inline size_type size() const;
-
-	// Not quite size_type max because we need some leaway in case we
-	// need to throw consumers out of a buffer whilst repairing it
-	static constexpr size_type Buffer_Capacity_Max = ~(std::numeric_limits<size_type>::max() >> 3) / 2;
 
 private:
 	friend class cqdetail::producer_buffer<T, allocator_type>;
@@ -252,7 +254,7 @@ inline concurrent_queue<T, Allocator>::concurrent_queue(size_type initProducerCa
 	, myProducerSlotPostIterator(0)
 	, myProducerSlotReservation(0)
 	, myProducerSlots(nullptr)
-	, myInitBufferCapacity(cqdetail::log2_align<void>(initProducerCapacity, Buffer_Capacity_Max))
+	, myInitBufferCapacity(cqdetail::log2_align<void>(initProducerCapacity, cqdetail::Buffer_Capacity_Max))
 	, myProducerArrayStore{ nullptr }
 	, myAllocator(allocator)
 	, myRelocationIndex(0)
@@ -338,7 +340,7 @@ inline void concurrent_queue<T, Allocator>::reserve(typename concurrent_queue<T,
 		init_producer(capacity);
 	}
 	else if (producer->get_capacity() < capacity) {
-		const size_type alignedCapacity(cqdetail::log2_align<void>(capacity, Buffer_Capacity_Max));
+		const size_type alignedCapacity(cqdetail::log2_align<void>(capacity, cqdetail::Buffer_Capacity_Max));
 		shared_ptr_slot_type buffer(create_producer_buffer(alignedCapacity));
 		producer->push_front(buffer);
 		producer = std::move(buffer);
@@ -382,7 +384,8 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 {
 	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 	if (producers == 1) {
-		if (this_consumer_cached() != &ourDummyContainer.myDummyRawBuffer) {
+		buffer_type* const cached(this_consumer_cached());
+		if ((cached != &ourDummyContainer.myDummyRawBuffer) & (cached->is_active())) {
 			return false;
 		}
 	}
@@ -427,7 +430,7 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_queue<T, Allocator>::create_producer_buffer(std::size_t withSize)
 {
-	const std::size_t log2size(cqdetail::log2_align<void>(withSize, Buffer_Capacity_Max));
+	const std::size_t log2size(cqdetail::log2_align<void>(withSize, cqdetail::Buffer_Capacity_Max));
 
 	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block_claim_custom_delete<buffer_type, allocator_adapter_type, cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>>));
 	const std::size_t alignOfData(alignof(T));
@@ -814,7 +817,7 @@ private:
 
 	inline void reintegrate_failed_entries(size_type failCount);
 
-	static constexpr size_type Buffer_Lock_Offset = concurrent_queue<T>::Buffer_Capacity_Max + Max_Producers;
+	static constexpr size_type Buffer_Lock_Offset = cqdetail::Buffer_Capacity_Max + Max_Producers;
 
 	std::atomic<size_type> myPreReadIterator;
 	std::atomic<size_type> myReadSlot;
