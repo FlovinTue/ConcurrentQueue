@@ -11,11 +11,6 @@
 
 // Test queue
 
-#define GDUL
-//#define MOODYCAMEL
-//#define MSC_RUNTIME
-//#define MTX_WRAPPER
-
 #ifdef MOODYCAMEL
 #include <concurrentqueue.h>
 #endif
@@ -37,6 +32,11 @@ public:
 		return true;
 	}
 	void push(T& in) { mtx.lock(); myQueue.push(in); mtx.unlock(); }
+	void clear() {
+		mtx.lock();
+		while (!myQueue.empty())myQueue.pop();
+		mtx.unlock();
+	}
 
 	std::mutex mtx;
 	std::queue<T> myQueue;
@@ -55,7 +55,10 @@ public:
 	Tester(Allocator& alloc);
 	~Tester();
 
-	double ExecuteConcurrent(uint32_t aRuns);
+	double ExecuteConcurrent(uint32_t runs);
+	double ExecuteSingleThread(uint32_t runs);
+	double ExecuteRead(uint32_t runs);
+	double ExecuteWrite(uint32_t runs);
 
 private:
 	bool CheckResults() const;
@@ -110,11 +113,11 @@ inline Tester<T, Allocator>::~Tester()
 	myReader.Decommission();
 }
 template<class T, class Allocator>
-inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
+inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t runs)
 {
 	double result(0.0);
 
-	for (uint32_t i = 0; i < aRuns; ++i) {
+	for (uint32_t i = 0; i < runs; ++i) {
 
 		for (uint32_t j = 0; j < Writers; ++j)
 			myWriter.AddTask(std::bind(&Tester::Write, this));
@@ -133,9 +136,7 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 
 #ifdef GDUL
 		myQueue.unsafe_clear();
-		myQueue.unsafe_size();
-		myQueue.size();
-#elif defined(MSC_RUNTIME)
+#elif defined(MSC_RUNTIME) || defined(MTX_WRAPPER)
 		myQueue.clear();
 #endif
 		myWaiting = 0;
@@ -150,6 +151,101 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 		std::cout << " and failed check";
 	}
 	std::cout << std::endl;
+
+	return result;
+}
+template<class T, class Allocator>
+inline double Tester<T, Allocator>::ExecuteSingleThread(uint32_t runs)
+{
+	double result(0.0);
+
+	for (uint32_t i = 0; i < runs; ++i) {
+		myWrittenSum = 0;
+		myReadSum = 0;
+		myThrown = 0;
+		myWaiting = Readers + Writers;
+
+		myWriter.AddTask(std::bind(&Tester::Write, this));
+		myReader.AddTask(std::bind(&Tester::Read, this));
+
+		Timer timer;
+		myIsRunning = true;
+
+		while (myWriter.HasUnfinishedTasks() | myReader.HasUnfinishedTasks())
+			std::this_thread::yield();
+
+		result += timer.GetTotalTime();
+
+		myIsRunning = false;
+	}
+
+	return result;
+}
+template<class T, class Allocator>
+inline double Tester<T, Allocator>::ExecuteRead(uint32_t runs)
+{
+	double result(0.0);
+
+	for (uint32_t i = 0; i < runs; ++i) {
+
+		myWaiting = Readers + Writers;
+
+		for (uint32_t j = 0; j < Writes; ++j) {
+			T in;
+			in.count = j;
+#ifndef MOODYCAMEL
+			myQueue.push(in);
+#else
+			myQueue.enqueue(in);
+#endif
+		}
+		for (uint32_t j = 0; j < Readers; ++j)
+			myReader.AddTask(std::bind(&Tester::Read, this));
+
+		Timer timer;
+		myIsRunning = true;
+
+		while (myReader.HasUnfinishedTasks())
+			std::this_thread::yield();
+
+		result += timer.GetTotalTime();
+
+		myIsRunning = false;
+	}
+
+	return result;
+}
+template<class T, class Allocator>
+inline double Tester<T, Allocator>::ExecuteWrite(uint32_t runs)
+{
+	double result(0.0);
+
+	for (uint32_t i = 0; i < runs; ++i) {
+
+		myWaiting = Readers + Writers;
+
+		for (uint32_t j = 0; j < Writers; ++j)
+			myWriter.AddTask(std::bind(&Tester::Write, this));
+
+		Timer timer;
+		myIsRunning = true;
+
+		while (myWriter.HasUnfinishedTasks())
+			std::this_thread::yield();
+
+#ifdef GDUL
+		myQueue.unsafe_clear();
+#elif defined(MSC_RUNTIME)
+		myQueue.clear();
+#elif defined(MOODYCAMEL)
+		T out;
+		while (myQueue.try_dequeue(out));
+#endif
+
+		result += timer.GetTotalTime();
+
+		myIsRunning = false;
+	}
 
 	return result;
 }
@@ -201,7 +297,7 @@ inline void Tester<T, Allocator>::Write()
 	
 	++myWaiting;
 
-	while (myWaiting != (Writers + Readers)) {
+	while (myWaiting < (Writers + Readers)) {
 		std::this_thread::yield();
 	}
 }
@@ -251,7 +347,7 @@ inline void Tester<T, Allocator>::Read()
 
 	++myWaiting;
 
-	while (myWaiting != (Writers + Readers)) {
+	while (myWaiting < (Writers + Readers)) {
 		std::this_thread::yield();
 	}
 }
