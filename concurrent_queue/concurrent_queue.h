@@ -29,7 +29,7 @@
 // a slight performance decrease
 
 
-/* #define CQ_ENABLE_EXCEPTIONHANDLING */
+ /* #define CQ_ENABLE_EXCEPTIONHANDLING */
 
 // In the event an exception is thrown during a pop operation, some entries may
 // be dequeued out-of-order as some consumers may already be halfway through a 
@@ -75,6 +75,8 @@ class producer_overflow : public std::runtime_error
 public:
 	producer_overflow(const char* errorMessage) : runtime_error(errorMessage) {}
 };
+
+static constexpr uint64_t Ptr_Mask = (uint64_t(std::numeric_limits<uint32_t>::max()) << 16 | uint64_t(std::numeric_limits<uint16_t>::max()));
 
 template <class T, class Allocator>
 struct accessor_cache;
@@ -164,7 +166,9 @@ public:
 	void unsafe_clear();
 
 	// size hint
-	inline size_type size() const;
+	inline size_type size();
+	// fast size hint
+	inline size_type unsafe_size();
 
 private:
 	friend class cqdetail::producer_buffer<T, allocator_type>;
@@ -336,12 +340,12 @@ inline void concurrent_queue<T, Allocator>::reserve(typename concurrent_queue<T,
 {
 	shared_ptr_slot_type& producer(this_producer());
 
-	if (!producer->is_valid()) {
+	if (!producer->is_valid()) { 
 		init_producer(capacity);
 	}
 	else if (producer->get_capacity() < capacity) {
-		const size_type alignedCapacity(cqdetail::log2_align<void>(capacity, cqdetail::Buffer_Capacity_Max));
-		shared_ptr_slot_type buffer(create_producer_buffer(alignedCapacity));
+		const size_type log2Capacity(cqdetail::log2_align<void>(capacity, cqdetail::Buffer_Capacity_Max));
+		shared_ptr_slot_type buffer(create_producer_buffer(log2Capacity));
 		producer->push_front(buffer);
 		producer = std::move(buffer);
 	}
@@ -360,7 +364,7 @@ inline void concurrent_queue<T, Allocator>::unsafe_clear()
 	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T, class Allocator>
-inline typename concurrent_queue<T, Allocator>::size_type concurrent_queue<T, Allocator>::size() const
+inline typename concurrent_queue<T, Allocator>::size_type concurrent_queue<T, Allocator>::size()
 {
 	const uint16_t producerCount(myProducerCount.load(std::memory_order_acquire));
 
@@ -368,7 +372,22 @@ inline typename concurrent_queue<T, Allocator>::size_type concurrent_queue<T, Al
 
 	size_type accumulatedSize(0);
 	for (uint16_t i = 0; i < producerCount; ++i) {
-		accumulatedSize += producerArray[i]->size();
+		shared_ptr_slot_type slot(producerArray[i].load());
+		accumulatedSize += slot->size();
+	}
+	return accumulatedSize;
+}
+template<class T, class Allocator>
+inline typename concurrent_queue<T, Allocator>::size_type concurrent_queue<T, Allocator>::unsafe_size()
+{
+	const uint16_t producerCount(myProducerCount.load(std::memory_order_acquire));
+
+	atomic_shared_ptr_slot_type* const producerArray(myProducerSlots.unsafe_get_owned());
+
+	size_type accumulatedSize(0);
+	for (uint16_t i = 0; i < producerCount; ++i) {
+		buffer_type* const slot(producerArray[i].unsafe_get_owned());
+		accumulatedSize += slot->size();
 	}
 	return accumulatedSize;
 }
@@ -711,7 +730,7 @@ inline cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::share
 template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::buffer_type* concurrent_queue<T, Allocator>::this_producer_cached()
 {
-	if ((ourLastProducerCache.myAddrBlock & aspdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
+	if ((ourLastProducerCache.myAddrBlock & cqdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
 		refresh_cached_producer();
 	}
 	return ourLastProducerCache.myBuffer;
@@ -720,7 +739,7 @@ inline typename concurrent_queue<T, Allocator>::buffer_type* concurrent_queue<T,
 template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::buffer_type* concurrent_queue<T, Allocator>::this_consumer_cached()
 {
-	if ((ourLastConsumerCache.myAddrBlock & aspdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
+	if ((ourLastConsumerCache.myAddrBlock & cqdetail::Ptr_Mask) ^ reinterpret_cast<uint64_t>(this)) {
 		refresh_cached_consumer();
 	}
 	return ourLastConsumerCache.myBuffer;
@@ -1021,8 +1040,9 @@ inline void producer_buffer<T, Allocator>::push_front(shared_ptr_slot_type newBu
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::unsafe_clear()
 {
-	myPreReadIterator.store(myPostWriteIterator.load(std::memory_order_relaxed), std::memory_order_relaxed);
-	myReadSlot.store(myPostWriteIterator.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	const size_type postWrite(myPostWriteIterator.load(std::memory_order_relaxed));
+	myPreReadIterator.store(postWrite, std::memory_order_relaxed);
+	myReadSlot.store(postWrite, std::memory_order_relaxed);
 
 	for (size_type i = 0; i < myCapacity; ++i) {
 		myDataBlock[i].set_state_local(item_state::Empty);
@@ -1032,7 +1052,7 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myFailiureCount.store(0, std::memory_order_relaxed);
 	myFailiureIndex.store(0, std::memory_order_relaxed);
 
-	myPostReadIterator.store(myPostWriteIterator.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	myPostReadIterator.store(postWrite, std::memory_order_relaxed);
 #endif
 	if (myNext) {
 		myNext->unsafe_clear();
@@ -1235,8 +1255,6 @@ private:
 	// May or may not reference this continer
 	inline item_container<T>& reference() const;
 
-	// Simple bitmask that represents the pointer portion of a 64 bit integer
-	static const uint64_t ourPtrMask = (uint64_t(std::numeric_limits<uint32_t>::max()) << 16 | uint64_t(std::numeric_limits<uint16_t>::max()));
 #endif
 	T myData;
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
@@ -1285,8 +1303,8 @@ inline void item_container<T>::store(T && in)
 template<class T>
 inline void item_container<T>::redirect(item_container<T>& to)
 {
-	const uint64_t otherPtrBlock(to.myStateBlock & ourPtrMask);
-	myStateBlock &= ~ourPtrMask;
+	const uint64_t otherPtrBlock(to.myStateBlock & Ptr_Mask);
+	myStateBlock &= ~Ptr_Mask;
 	myStateBlock |= otherPtrBlock;
 }
 #endif
@@ -1317,6 +1335,7 @@ inline void item_container<T>::set_state(item_state state)
 	myState = state;
 #endif
 }
+
 template<class T>
 inline void item_container<T>::set_state_local(item_state state)
 {
@@ -1338,7 +1357,7 @@ inline item_state item_container<T>::get_state_local() const
 template<class T>
 inline item_container<T>& item_container<T>::reference() const
 {
-	return *reinterpret_cast<item_container<T>*>(myStateBlock & ourPtrMask);
+	return *reinterpret_cast<item_container<T>*>(myStateBlock & Ptr_Mask);
 }
 #endif
 template<class T>

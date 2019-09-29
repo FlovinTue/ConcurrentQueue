@@ -7,7 +7,6 @@
 #include <concurrent_queue.h>
 #include <queue>
 #include <mutex>
-//#include <concurrentqueue.h>
 
 
 // Test queue
@@ -16,6 +15,10 @@
 //#define MOODYCAMEL
 //#define MSC_RUNTIME
 //#define MTX_WRAPPER
+
+#ifdef MOODYCAMEL
+#include <concurrentqueue.h>
+#endif
 
 template <class T>
 class queue_mutex_wrapper
@@ -39,9 +42,9 @@ public:
 	std::queue<T> myQueue;
 };
 
-const uint32_t Writes = 2048;
-const uint32_t Writers = 1; //std::thread::hardware_concurrency() / 2;
-const uint32_t Readers = 1; //std::thread::hardware_concurrency() / 2;
+const uint32_t Writes = 2048; 
+const uint32_t Writers = std::thread::hardware_concurrency() / 2;
+const uint32_t Readers = std::thread::hardware_concurrency() / 2;
 const uint32_t WritesPerThread(Writes / Writers);
 const uint32_t ReadsPerThread(Writes / Readers);
 
@@ -77,6 +80,7 @@ private:
 	std::atomic<uint32_t> myWrittenSum;
 	std::atomic<uint32_t> myReadSum;
 	std::atomic<uint32_t> myThrown;
+	std::atomic<uint32_t> myWaiting;
 };
 
 template<class T, class Allocator>
@@ -90,7 +94,8 @@ inline Tester<T, Allocator>::Tester(Allocator&
 	myReader(Readers, Writers),
 	myWrittenSum(0),
 	myReadSum(0),
-	myThrown(0)
+	myThrown(0),
+	myWaiting(0)
 #ifdef GDUL
 	, myQueue(alloc)
 #endif
@@ -128,9 +133,12 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t aRuns)
 
 #ifdef GDUL
 		myQueue.unsafe_clear();
+		myQueue.unsafe_size();
+		myQueue.size();
 #elif defined(MSC_RUNTIME)
 		myQueue.clear();
 #endif
+		myWaiting = 0;
 
 		result += timer.GetTotalTime();
 
@@ -157,7 +165,7 @@ template<class T, class Allocator>
 inline void Tester<T, Allocator>::Write()
 {
 #ifdef GDUL
-	//myQueue.reserve(WritesPerThread);
+	myQueue.reserve(WritesPerThread);
 #endif
 
 	while (!myIsRunning);
@@ -188,8 +196,14 @@ inline void Tester<T, Allocator>::Write()
 #endif
 	}
 #endif
-	
+
 	myWrittenSum += sum;
+	
+	++myWaiting;
+
+	while (myWaiting != (Writers + Readers)) {
+		std::this_thread::yield();
+	}
 }
 
 template<class T, class Allocator>
@@ -234,5 +248,11 @@ inline void Tester<T, Allocator>::Read()
 	}
 #endif
 	myReadSum += sum;
+
+	++myWaiting;
+
+	while (myWaiting != (Writers + Readers)) {
+		std::this_thread::yield();
+	}
 }
 
