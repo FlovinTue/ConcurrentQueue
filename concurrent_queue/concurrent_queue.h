@@ -331,6 +331,7 @@ bool concurrent_queue<T, Allocator>::try_pop(T & out)
 
 	if ((1 < producers) & !(++ourLastConsumerCache.myCounter < cqdetail::Consumer_Force_Relocation_Pop_Count)) {
 		relocate_consumer();
+		ourLastConsumerCache.myCounter = 0;
 	}
 	
 	return true;
@@ -461,16 +462,18 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 	const std::size_t bufferByteSize(sizeof(buffer_type));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
 	const std::size_t controlBlockByteSize(shared_ptr_slot_type::alloc_size_claim());
+	const std::size_t stateBlockByteSize(log2size);
 
 	const std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, maxAlign));
 	const std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, maxAlign));
 	const std::size_t dataBlockSize(cqdetail::aligned_size<void>(dataBlockByteSize, maxAlign));
-
+	const std::size_t stateBlockSize(cqdetail::aligned_size<void>(stateBlockByteSize, maxAlign));
 	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + maxAlign);
 
 	uint8_t* totalBlock(nullptr);
 
 	buffer_type* buffer(nullptr);
+	cqdetail::item_state* state(nullptr);
 	cqdetail::item_container<T>* data(nullptr);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
@@ -481,13 +484,16 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 		const std::size_t totalBlockBegin(reinterpret_cast<std::size_t>(totalBlock));
 		const std::size_t controlBlockBegin(cqdetail::aligned_size<void>(totalBlockBegin, maxAlign));
 		const std::size_t bufferBegin(controlBlockBegin + controlBlockSize);
-		const std::size_t dataBegin(bufferBegin + bufferSize);
+		const std::size_t stateBegin(bufferBegin + bufferSize);
+		const std::size_t dataBegin(stateBegin + stateBlockSize);
 
 		const std::size_t bufferOffset(bufferBegin - totalBlockBegin);
+		const std::size_t stateOffset(stateBegin - totalBlockBegin);
 		const std::size_t dataOffset(dataBegin - totalBlockBegin);
 
+		state = new (totalBlock + stateOffset) cqdetail::item_state[log2size]{};
 		data = new (totalBlock + dataOffset) cqdetail::item_container<T>[log2size];
-		buffer = new(totalBlock + bufferOffset) buffer_type(static_cast<size_type>(log2size), data);
+		buffer = new(totalBlock + bufferOffset) buffer_type(static_cast<size_type>(log2size), state, data);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
@@ -750,6 +756,7 @@ inline void concurrent_queue<T, Allocator>::refresh_cached_consumer()
 {
 	ourLastConsumerCache.myBuffer = static_cast<buffer_type*>(this_consumer().myBuffer);
 	ourLastConsumerCache.myAddr = this;
+	ourLastConsumerCache.myCounter = this_consumer().myPopCounter;
 }
 
 template<class T, class Allocator>
@@ -763,7 +770,7 @@ namespace cqdetail
 {
 
 template <class T, class Allocator>
-class alignas(CQ_CACHELINE_SIZE) producer_buffer
+class producer_buffer
 {
 private:
 	typedef typename concurrent_queue<T, Allocator>::shared_ptr_slot_type shared_ptr_slot_type;
@@ -772,7 +779,7 @@ public:
 	typedef typename concurrent_queue<T, Allocator>::size_type size_type;
 	typedef typename concurrent_queue<T, Allocator>::allocator_type allocator_type;
 
-	producer_buffer(size_type capacity, item_container<T>* dataBlock);
+	producer_buffer(size_type capacity, item_state* stateBlock, item_container<T>* dataBlock);
 	~producer_buffer();
 
 	template<class ...Arg>
@@ -834,6 +841,9 @@ private:
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline void check_for_damage();
 
+	inline void set_state(size_type index, item_state state);
+	inline item_state get_state(size_type index) const;
+
 	inline void reintegrate_failed_entries(size_type failCount);
 
 	static constexpr size_type Buffer_Lock_Offset = cqdetail::Buffer_Capacity_Max + Max_Producers;
@@ -857,12 +867,13 @@ private:
 	shared_ptr_slot_type myNext;
 
 	const size_type myCapacity;
-
+	item_state* const myStateBlock;
 	item_container<T>* const myDataBlock;
 };
 template<class T, class Allocator>
-inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_container<T>* dataBlock)
+inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_state* stateBlock, item_container<T>* dataBlock)
 	: myNext(nullptr)
+	, myStateBlock(stateBlock)
 	, myDataBlock(dataBlock)
 	, myCapacity(capacity)
 	, myReadSlot(0)
@@ -893,12 +904,12 @@ inline bool producer_buffer<T, Allocator>::is_active() const
 template<class T, class Allocator>
 inline bool producer_buffer<T, Allocator>::is_valid() const
 {
-	return myDataBlock[myWriteSlot % myCapacity].get_state_local() != item_state::Dummy;
+	return get_state(myWriteSlot % myCapacity) != item_state::Dummy;
 }
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::invalidate()
 {
-	myDataBlock[myWriteSlot % myCapacity].set_state(item_state::Dummy);
+	set_state(myWriteSlot % myCapacity, item_state::Dummy);
 	if (myNext) {
 		myNext->invalidate();
 	}
@@ -971,7 +982,7 @@ inline bool producer_buffer<T, Allocator>::verify_successor(const shared_ptr_slo
 		for (size_type i = 0; i < inspect->myCapacity; ++i) {
 			const size_type index((preRead - i) % inspect->myCapacity);
 
-			if (inspect->myDataBlock[index].get_state_local() != item_state::Empty) {
+			if (get_state(index) != item_state::Empty) {
 				return false;
 			}
 		}
@@ -1044,9 +1055,7 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myPreReadIterator.store(postWrite, std::memory_order_relaxed);
 	myReadSlot.store(postWrite, std::memory_order_relaxed);
 
-	for (size_type i = 0; i < myCapacity; ++i) {
-		myDataBlock[i].set_state_local(item_state::Empty);
-	}
+	memset(myStateBlock, 0, myCapacity);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myFailiureCount.store(0, std::memory_order_relaxed);
@@ -1067,14 +1076,14 @@ inline bool producer_buffer<T, Allocator>::try_push(Arg && ...in)
 
 	std::atomic_thread_fence(std::memory_order_acquire);
 
-	if (myDataBlock[slot].get_state_local() != item_state::Empty) {
+	if (get_state(slot) != item_state::Empty) {
 		--myWriteSlot;
 		return false;
 	}
 
 	write_in(slot, std::forward<Arg>(in)...);
 
-	myDataBlock[slot].set_state_local(item_state::Valid);
+	set_state(slot, item_state::Valid);
 
 	myPostWriteIterator.fetch_add(1, std::memory_order_release);
 
@@ -1149,14 +1158,14 @@ template<class T, class Allocator>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::post_pop_cleanup(typename producer_buffer<T, Allocator>::size_type readSlot)
 {
-	myDataBlock[readSlot].set_state(item_state::Empty);
+	set_state(readSlot, item_state::Empty);
 	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T, class Allocator>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::post_pop_cleanup(typename producer_buffer<T, Allocator>::size_type readSlot)
 {
-	myDataBlock[readSlot].set_state(item_state::Empty);
+	set_state(readSlot, item_state::Empty);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myDataBlock[readSlot].reset_ref();
 	myPostReadIterator.fetch_add(1, std::memory_order_release);
@@ -1189,6 +1198,16 @@ inline void producer_buffer<T, Allocator>::write_out(typename producer_buffer<T,
 		throw;
 	}
 #endif
+}
+template<class T, class Allocator>
+inline void producer_buffer<T, Allocator>::set_state(size_type index, item_state state)
+{
+	myStateBlock[index] = state;
+}
+template<class T, class Allocator>
+inline item_state producer_buffer<T, Allocator>::get_state(size_type index) const
+{
+	return myStateBlock[index];
 }
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::reintegrate_failed_entries(typename producer_buffer<T, Allocator>::size_type failCount)
@@ -1229,7 +1248,7 @@ public:
 	item_container<T>& operator=(const item_container&) = delete;
 
 	inline item_container();
-	inline item_container(item_state state);
+	//inline item_container(item_state state);
 
 	inline void store(const T& in);
 	inline void store(T&& in);
@@ -1243,10 +1262,6 @@ public:
 
 	inline void assign(T& out);
 	inline void move(T& out);
-
-	inline item_state get_state_local() const;
-	inline void set_state(item_state state);
-	inline void set_state_local(item_state state);
 
 	inline void reset_ref();
 
@@ -1268,8 +1283,6 @@ private:
 			item_state myState;
 		};
 	};
-#else
-	item_state myState;
 #endif
 };
 template<class T>
@@ -1277,14 +1290,7 @@ inline item_container<T>::item_container()
 	: myData()
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	, myReference(this)
-#else
-	, myState(item_state::Empty)
 #endif
-{
-}
-template<class T>
-inline item_container<T>::item_container(item_state state)
-	: myState(state)
 {
 }
 template<class T>
@@ -1327,31 +1333,11 @@ inline void item_container<T>::move(T & out)
 #endif
 }
 template<class T>
-inline void item_container<T>::set_state(item_state state)
-{
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	reference().myState = state;
-#else
-	myState = state;
-#endif
-}
-
-template<class T>
-inline void item_container<T>::set_state_local(item_state state)
-{
-	myState = state;
-}
-template<class T>
 inline void item_container<T>::reset_ref()
 {
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myReference = this;
 #endif
-}
-template<class T>
-inline item_state item_container<T>::get_state_local() const
-{
-	return myState;
 }
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 template<class T>
@@ -1380,7 +1366,6 @@ inline void item_container<T>::try_move(U& out)
 	out = myData;
 #endif
 }
-
 enum class item_state : uint8_t
 {
 	Empty,
@@ -1541,7 +1526,7 @@ public:
 
 
 	dummy_type myDummyBuffer;
-	item_container<T> myDummyItem;
+	item_state myDummyState;
 	producer_buffer<T, allocator_type> myDummyRawBuffer;
 };
 template <class IndexType, class Allocator>
@@ -1652,8 +1637,8 @@ inline void index_pool<IndexType, Allocator>::add(IndexType index)
 }
 template<class T, class Allocator>
 inline dummy_container<T, Allocator>::dummy_container()
-	: myDummyItem(item_state::Dummy)
-	, myDummyRawBuffer(1, &myDummyItem)
+	: myDummyState(item_state::Dummy)
+	, myDummyRawBuffer(1, &myDummyState, nullptr)
 {
 	myDummyBuffer = dummy_type{ &myDummyRawBuffer, [](buffer_type*, allocator_adapter_type&) {} };
 }
