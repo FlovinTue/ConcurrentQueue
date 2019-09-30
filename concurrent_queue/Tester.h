@@ -57,14 +57,15 @@ public:
 
 	double ExecuteConcurrent(uint32_t runs);
 	double ExecuteSingleThread(uint32_t runs);
+	double ExecuteSingleProducerSingleConsumer(uint32_t runs);
 	double ExecuteRead(uint32_t runs);
 	double ExecuteWrite(uint32_t runs);
 
 private:
 	bool CheckResults() const;
 
-	void Write();
-	void Read();
+	void Write(uint32_t writes);
+	void Read(uint32_t writes);
 
 #ifdef GDUL
 	gdul::concurrent_queue<T, Allocator> myQueue;
@@ -120,9 +121,9 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t runs)
 	for (uint32_t i = 0; i < runs; ++i) {
 
 		for (uint32_t j = 0; j < Writers; ++j)
-			myWriter.AddTask(std::bind(&Tester::Write, this));
+			myWriter.AddTask(std::bind(&Tester::Write, this, WritesPerThread));
 		for (uint32_t j = 0; j < Readers; ++j)
-			myReader.AddTask(std::bind(&Tester::Read, this));
+			myReader.AddTask(std::bind(&Tester::Read, this, ReadsPerThread));
 
 		myWrittenSum = 0;
 		myReadSum = 0;
@@ -165,16 +166,47 @@ inline double Tester<T, Allocator>::ExecuteSingleThread(uint32_t runs)
 		myThrown = 0;
 		myWaiting = Readers + Writers;
 
-		myWriter.AddTask(std::bind(&Tester::Write, this));
-		myReader.AddTask(std::bind(&Tester::Read, this));
+		myIsRunning = true;
 
 		Timer timer;
+
+		Write(Writes);
+		Read(Writes);
+
+		result += timer.GetTotalTime();
+
+		myWaiting = 0;
+
+		myIsRunning = false;
+	}
+
+	return result;
+}
+template<class T, class Allocator>
+inline double Tester<T, Allocator>::ExecuteSingleProducerSingleConsumer(uint32_t runs)
+{
+	double result(0.0);
+
+	for (uint32_t i = 0; i < runs; ++i) {
+		myWrittenSum = 0;
+		myReadSum = 0;
+		myThrown = 0;
+		myWaiting = Readers + Writers;
+
+
+		myWriter.AddTask(std::bind(&Tester::Write, this, Writes));
+		myReader.AddTask(std::bind(&Tester::Read, this, Writes));
+
+		Timer timer;
+
 		myIsRunning = true;
 
 		while (myWriter.HasUnfinishedTasks() | myReader.HasUnfinishedTasks())
 			std::this_thread::yield();
 
 		result += timer.GetTotalTime();
+
+		myWaiting = 0;
 
 		myIsRunning = false;
 	}
@@ -200,7 +232,7 @@ inline double Tester<T, Allocator>::ExecuteRead(uint32_t runs)
 #endif
 		}
 		for (uint32_t j = 0; j < Readers; ++j)
-			myReader.AddTask(std::bind(&Tester::Read, this));
+			myReader.AddTask(std::bind(&Tester::Read, this, ReadsPerThread));
 
 		Timer timer;
 		myIsRunning = true;
@@ -209,6 +241,8 @@ inline double Tester<T, Allocator>::ExecuteRead(uint32_t runs)
 			std::this_thread::yield();
 
 		result += timer.GetTotalTime();
+
+		myWaiting = 0;
 
 		myIsRunning = false;
 	}
@@ -225,7 +259,7 @@ inline double Tester<T, Allocator>::ExecuteWrite(uint32_t runs)
 		myWaiting = Readers + Writers;
 
 		for (uint32_t j = 0; j < Writers; ++j)
-			myWriter.AddTask(std::bind(&Tester::Write, this));
+			myWriter.AddTask(std::bind(&Tester::Write, this, WritesPerThread));
 
 		Timer timer;
 		myIsRunning = true;
@@ -244,6 +278,8 @@ inline double Tester<T, Allocator>::ExecuteWrite(uint32_t runs)
 
 		result += timer.GetTotalTime();
 
+		myWaiting = 0;
+
 		myIsRunning = false;
 	}
 
@@ -258,10 +294,10 @@ inline bool Tester<T, Allocator>::CheckResults() const
 	return true;
 }
 template<class T, class Allocator>
-inline void Tester<T, Allocator>::Write()
+inline void Tester<T, Allocator>::Write(uint32_t writes)
 {
 #ifdef GDUL
-	myQueue.reserve(WritesPerThread);
+	myQueue.reserve(writes);
 #endif
 
 	while (!myIsRunning);
@@ -269,7 +305,7 @@ inline void Tester<T, Allocator>::Write()
 	uint32_t sum(0);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	for (uint32_t j = 0; j < WritesPerThread; ) {
+	for (uint32_t j = 0; j < writes; ) {
 		T in(1);
 		try {
 			myQueue.push(std::move(in));
@@ -281,7 +317,7 @@ inline void Tester<T, Allocator>::Write()
 		}
 	}
 #else
-	for (uint32_t j = 0; j < WritesPerThread; ++j) {
+	for (uint32_t j = 0; j < writes; ++j) {
 		T in;
 		in.count = j;
 		sum += in.count;
@@ -303,7 +339,7 @@ inline void Tester<T, Allocator>::Write()
 }
 
 template<class T, class Allocator>
-inline void Tester<T, Allocator>::Read()
+inline void Tester<T, Allocator>::Read(uint32_t reads)
 {
 	while (!myIsRunning);
 
@@ -311,7 +347,7 @@ inline void Tester<T, Allocator>::Read()
 
 	T out{0};
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	for (uint32_t j = 0; j < ReadsPerThread;) {
+	for (uint32_t j = 0; j < reads;) {
 		while (true) {
 			try {
 				if (myQueue.try_pop(out)) {
@@ -327,7 +363,7 @@ inline void Tester<T, Allocator>::Read()
 	}
 
 #else
-	for (uint32_t j = 0; j < ReadsPerThread; ++j) {
+	for (uint32_t j = 0; j < reads; ++j) {
 		while (true) {
 #ifndef MOODYCAMEL
 			if (myQueue.try_pop(out)) {
