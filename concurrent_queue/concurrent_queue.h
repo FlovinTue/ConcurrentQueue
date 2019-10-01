@@ -763,7 +763,7 @@ namespace cqdetail
 {
 
 template <class T, class Allocator>
-class alignas(CQ_CACHELINE_SIZE) producer_buffer
+class producer_buffer
 {
 private:
 	typedef typename concurrent_queue<T, Allocator>::shared_ptr_slot_type shared_ptr_slot_type;
@@ -852,13 +852,13 @@ private:
 #endif
 	size_type myWriteSlot;
 	std::atomic<size_type> myPostWriteIterator;
-	CQ_PADDING(CQ_CACHELINE_SIZE);
-	std::atomic<bool> myNextState;
+	CQ_PADDING(CQ_CACHELINE_SIZE - sizeof(size_type) * 2);
 	shared_ptr_slot_type myNext;
 
 	const size_type myCapacity;
-
 	item_container<T>* const myDataBlock;
+
+	std::atomic<bool> myNextState;
 };
 template<class T, class Allocator>
 inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_container<T>* dataBlock)
