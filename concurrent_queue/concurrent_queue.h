@@ -468,7 +468,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 	const std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, maxAlign));
 	const std::size_t dataBlockSize(cqdetail::aligned_size<void>(dataBlockByteSize, maxAlign));
 	const std::size_t stateBlockSize(cqdetail::aligned_size<void>(stateBlockByteSize, maxAlign));
-	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + maxAlign);
+	const std::size_t totalBlockSize(controlBlockSize + bufferSize + stateBlockSize + dataBlockSize + maxAlign);
 
 	uint8_t* totalBlock(nullptr);
 
