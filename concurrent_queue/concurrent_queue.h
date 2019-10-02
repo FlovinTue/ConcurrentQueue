@@ -24,6 +24,7 @@
 #include <vector>
 #include <limits>
 #include <atomic_shared_ptr.h>
+#include <cassert>
 
 // Exception handling may be enabled for basic exception safety at the cost of 
 // a slight performance decrease
@@ -104,6 +105,9 @@ class store_array_deleter;
 enum class item_state : uint8_t;
 
 template <class Dummy>
+class state_container;
+
+template <class Dummy>
 std::size_t log2_align(std::size_t from, std::size_t clamp);
 
 template <class T, class Allocator>
@@ -153,22 +157,27 @@ public:
 	inline concurrent_queue(Allocator allocator);
 	inline concurrent_queue(size_type initProducerCapacity);
 	inline concurrent_queue(size_type initProducerCapacity, Allocator allocator);
-	inline ~concurrent_queue();
+	inline ~concurrent_queue() noexcept;
 
 	inline void push(const T& in);
 	inline void push(T&& in);
 
 	bool try_pop(T& out);
 
-	// Reserves a minimum capacity for the calling producer
+	// reserves a minimum capacity for the calling producer
 	inline void reserve(size_type capacity);
-
-	void unsafe_clear();
 
 	// size hint
 	inline size_type size();
-	// fast size hint
+
+	// fast unsafe size hint
 	inline size_type unsafe_size();
+
+	// logically remove entries
+	void unsafe_clear();
+
+	// reset the structure to its initial state
+	void unsafe_reset();
 
 private:
 	friend class cqdetail::producer_buffer<T, allocator_type>;
@@ -265,18 +274,9 @@ inline concurrent_queue<T, Allocator>::concurrent_queue(size_type initProducerCa
 {
 }
 template<class T, class Allocator>
-inline concurrent_queue<T, Allocator>::~concurrent_queue()
+inline concurrent_queue<T, Allocator>::~concurrent_queue() noexcept
 {
-	std::atomic_thread_fence(std::memory_order_acquire);
-
-	const uint16_t producerCount(myProducerCount.load(std::memory_order_relaxed));
-	const uint16_t slots(cqdetail::to_store_array_slot<void>(producerCount - static_cast<bool>(producerCount)) + static_cast<bool>(producerCount));
-
-	kill_store_array_below(slots, true);
-
-	for (uint16_t i = 0; i < myProducerCount.load(std::memory_order_relaxed); ++i) {
-		myProducerSlots.unsafe_get_owned()[i].unsafe_store(nullptr);
-	}
+	unsafe_reset();
 
 	ourIndexPool.add(myInstanceIndex);
 }
@@ -365,6 +365,28 @@ inline void concurrent_queue<T, Allocator>::unsafe_clear()
 	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T, class Allocator>
+inline void concurrent_queue<T, Allocator>::unsafe_reset()
+{
+	std::atomic_thread_fence(std::memory_order_acquire);
+
+	const uint16_t producerCount(myProducerCount.load(std::memory_order_relaxed));
+	const uint16_t slots(cqdetail::to_store_array_slot<void>(producerCount - static_cast<bool>(producerCount)) + static_cast<bool>(producerCount));
+
+	kill_store_array_below(slots, true);
+
+	myRelocationIndex.store(0, std::memory_order_relaxed);
+	myProducerCapacity.store(0, std::memory_order_relaxed);
+	myProducerCount.store(0, std::memory_order_relaxed);
+	myProducerSlotPostIterator.store(0, std::memory_order_relaxed);
+	myProducerSlotReservation.store(0, std::memory_order_relaxed);
+
+	for (uint16_t i = 0; i < producerCount; ++i) {
+		myProducerSlots.unsafe_get_owned()[i].unsafe_store(nullptr);
+	}
+
+	std::atomic_thread_fence(std::memory_order_release);
+}
+template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::size_type concurrent_queue<T, Allocator>::size()
 {
 	const uint16_t producerCount(myProducerCount.load(std::memory_order_acquire));
@@ -405,7 +427,7 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 	const uint16_t producers(myProducerCount.load(std::memory_order_acquire));
 	if (producers == 1) {
 		buffer_type* const cached(this_consumer_cached());
-		if ((cached != &ourDummyContainer.myDummyRawBuffer) & (cached->is_active())) {
+		if (cached->is_valid() & cached->is_active()) {
 			return false;
 		}
 	}
@@ -425,6 +447,11 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 		if (!producerBuffer) {
 			consumer.myLastKnownArray = myProducerSlots.load();
 			--i; --j;
+			continue;
+		}
+
+		if (!producerBuffer->is_valid() | !producerBuffer->size()) {
+			assert(producerBuffer->is_valid() && "An invalid buffer should not exist in the queue structure. Rogue 'unsafe_reset()' ?");
 			continue;
 		}
 
@@ -560,7 +587,7 @@ inline void concurrent_queue<T, Allocator>::try_alloc_produer_store_slot(uint8_t
 		new (item) (atomic_shared_ptr_slot_type);
 	}
 
-	shared_ptr_array_type expected(nullptr);
+	shared_ptr_array_type expected(nullptr, myProducerArrayStore[storeArraySlot].get_version());
 
 	myProducerArrayStore[storeArraySlot].compare_exchange_strong(expected, std::move(desired));
 }
@@ -780,7 +807,7 @@ public:
 	typedef typename concurrent_queue<T, Allocator>::allocator_type allocator_type;
 
 	producer_buffer(size_type capacity, item_state* stateBlock, item_container<T>* dataBlock);
-	~producer_buffer();
+	~producer_buffer() noexcept;
 
 	template<class ...Arg>
 	inline bool try_push(Arg&&... in);
@@ -862,14 +889,16 @@ private:
 #endif
 	size_type myWriteSlot;
 	std::atomic<size_type> myPostWriteIterator;
-	CQ_PADDING(CQ_CACHELINE_SIZE);
-	std::atomic<bool> myNextState;
+	CQ_PADDING((CQ_CACHELINE_SIZE) - sizeof(size_type) * 2);
 	shared_ptr_slot_type myNext;
 
 	const size_type myCapacity;
 	item_state* const myStateBlock;
 	item_container<T>* const myDataBlock;
+
+	std::atomic<bool> myNextState;
 };
+const size_t blah = sizeof(producer_buffer<int, std::allocator<uint8_t>>);
 template<class T, class Allocator>
 inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_state* stateBlock, item_container<T>* dataBlock)
 	: myNext(nullptr)
@@ -890,7 +919,7 @@ inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T
 }
 
 template<class T, class Allocator>
-inline producer_buffer<T, Allocator>::~producer_buffer()
+inline producer_buffer<T, Allocator>::~producer_buffer() noexcept
 {
 	for (size_type i = 0; i < myCapacity; ++i) {
 		myDataBlock[i].~item_container<T>();
@@ -1368,10 +1397,10 @@ inline void item_container<T>::try_move(U& out)
 }
 enum class item_state : uint8_t
 {
-	Empty,
-	Valid,
-	Failed,
-	Dummy
+	Empty = 0,
+	Valid = 1,
+	Failed = 2,
+	Dummy = 3,
 };
 template <class Dummy>
 std::size_t log2_align(std::size_t from, std::size_t clamp)
@@ -1534,7 +1563,7 @@ class index_pool
 {
 public:
 	index_pool();
-	~index_pool();
+	~index_pool() noexcept;
 
 	IndexType get();
 	void add(IndexType index);
@@ -1601,7 +1630,7 @@ inline index_pool<IndexType, Allocator>::index_pool()
 {
 }
 template<class IndexType, class Allocator>
-inline index_pool<IndexType, Allocator>::~index_pool()
+inline index_pool<IndexType, Allocator>::~index_pool() noexcept
 {
 	shared_ptr<node, Allocator> top(myTop.unsafe_load());
 	while (top) {
@@ -1641,6 +1670,33 @@ inline dummy_container<T, Allocator>::dummy_container()
 	, myDummyRawBuffer(1, &myDummyState, nullptr)
 {
 	myDummyBuffer = dummy_type{ &myDummyRawBuffer, [](buffer_type*, allocator_adapter_type&) {} };
+}
+template <class Dummy>
+class state_container
+{
+public:
+	state_container(size_type capacity, item_state* stateBlock);
+
+	void set_state(size_type index, item_state state); // Hmm : )
+	//void set_state_all();
+
+private:
+	static std::atomic<uint8_t> ourStateLaneIterator;
+
+	const size_type myCapacity;
+	item_state* const myLanes[4];
+};
+template<class Dummy>
+inline state_container<Dummy>::state_container(size_type capacity, item_state * stateBlock)
+	: myLanes{&stateBlock[0], &stateBlock[(capacity / 4) * 1], &stateBlock[(capacity / 4) * 2], &stateBlock[(capacity / 4) * 3], }
+{
+}
+template<class Dummy>
+inline void state_container<Dummy>::set_state(size_type index, item_state state)
+{
+	static thread_local const uint8_t ourStateLane(ourStateLaneIterator.fetch_add(1, std::memory_order_acq_rel));
+
+	myLanes[ourStateLane][index] = state;
 }
 }
 template <class T, class Allocator>
