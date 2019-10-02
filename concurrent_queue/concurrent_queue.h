@@ -489,7 +489,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 	const std::size_t bufferByteSize(sizeof(buffer_type));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
 	const std::size_t controlBlockByteSize(shared_ptr_slot_type::alloc_size_claim());
-	const std::size_t stateBlockByteSize(log2size);
+	const std::size_t stateBlockByteSize(log2size * 4);
 
 	const std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, maxAlign));
 	const std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, maxAlign));
@@ -868,9 +868,6 @@ private:
 	template <class U = T, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>* = nullptr>
 	inline void check_for_damage();
 
-	inline void set_state(size_type index, item_state state);
-	inline item_state get_state(size_type index) const;
-
 	inline void reintegrate_failed_entries(size_type failCount);
 
 	static constexpr size_type Buffer_Lock_Offset = cqdetail::Buffer_Capacity_Max + Max_Producers;
@@ -893,22 +890,22 @@ private:
 	shared_ptr_slot_type myNext;
 
 	const size_type myCapacity;
-	item_state* const myStateBlock;
 	item_container<T>* const myDataBlock;
+
+	state_container<void> myStateContainer;
 
 	std::atomic<bool> myNextState;
 };
-const size_t blah = sizeof(producer_buffer<int, std::allocator<uint8_t>>);
 template<class T, class Allocator>
 inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_state* stateBlock, item_container<T>* dataBlock)
 	: myNext(nullptr)
-	, myStateBlock(stateBlock)
 	, myDataBlock(dataBlock)
 	, myCapacity(capacity)
 	, myReadSlot(0)
 	, myPreReadIterator(0)
 	, myWriteSlot(0)
 	, myPostWriteIterator(0)
+	, myStateContainer(capacity, stateBlock)
 	, myNextState(false)
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	, myFailiureIndex(0)
@@ -933,12 +930,13 @@ inline bool producer_buffer<T, Allocator>::is_active() const
 template<class T, class Allocator>
 inline bool producer_buffer<T, Allocator>::is_valid() const
 {
-	return get_state(myWriteSlot % myCapacity) != item_state::Dummy;
+	return myStateContainer.contains(myWriteSlot % myCapacity, item_state::Dummy);
 }
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::invalidate()
 {
-	set_state(myWriteSlot % myCapacity, item_state::Dummy);
+	myStateContainer.set_state_all_lanes(myWriteSlot % myCapacity, item_state::Dummy);
+
 	if (myNext) {
 		myNext->invalidate();
 	}
@@ -1011,7 +1009,7 @@ inline bool producer_buffer<T, Allocator>::verify_successor(const shared_ptr_slo
 		for (size_type i = 0; i < inspect->myCapacity; ++i) {
 			const size_type index((preRead - i) % inspect->myCapacity);
 
-			if (get_state(index) != item_state::Empty) {
+			if (myStateContainer.valid(index)) {
 				return false;
 			}
 		}
@@ -1084,7 +1082,7 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myPreReadIterator.store(postWrite, std::memory_order_relaxed);
 	myReadSlot.store(postWrite, std::memory_order_relaxed);
 
-	memset(myStateBlock, 0, myCapacity);
+	myStateContainer.initialize(myCapacity, item_state::Consumed);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myFailiureCount.store(0, std::memory_order_relaxed);
@@ -1105,14 +1103,14 @@ inline bool producer_buffer<T, Allocator>::try_push(Arg && ...in)
 
 	std::atomic_thread_fence(std::memory_order_acquire);
 
-	if (get_state(slot) != item_state::Empty) {
+	if (!myStateContainer.contains(slot, item_state::Consumed)) {
 		--myWriteSlot;
 		return false;
 	}
 
 	write_in(slot, std::forward<Arg>(in)...);
 
-	set_state(slot, item_state::Valid);
+	myStateContainer.set_state_all_lanes(slot, item_state::Valid);
 
 	myPostWriteIterator.fetch_add(1, std::memory_order_release);
 
@@ -1187,14 +1185,14 @@ template<class T, class Allocator>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::post_pop_cleanup(typename producer_buffer<T, Allocator>::size_type readSlot)
 {
-	set_state(readSlot, item_state::Empty);
+	myStateContainer.set_state(readSlot, item_state::Consumed);
 	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T, class Allocator>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::post_pop_cleanup(typename producer_buffer<T, Allocator>::size_type readSlot)
 {
-	set_state(readSlot, item_state::Empty);
+	myStateContainer.set_state(readSlot, item_state::Consumed);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myDataBlock[readSlot].reset_ref();
 	myPostReadIterator.fetch_add(1, std::memory_order_release);
@@ -1227,16 +1225,6 @@ inline void producer_buffer<T, Allocator>::write_out(typename producer_buffer<T,
 		throw;
 	}
 #endif
-}
-template<class T, class Allocator>
-inline void producer_buffer<T, Allocator>::set_state(size_type index, item_state state)
-{
-	myStateBlock[index] = state;
-}
-template<class T, class Allocator>
-inline item_state producer_buffer<T, Allocator>::get_state(size_type index) const
-{
-	return myStateBlock[index];
 }
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::reintegrate_failed_entries(typename producer_buffer<T, Allocator>::size_type failCount)
@@ -1277,7 +1265,6 @@ public:
 	item_container<T>& operator=(const item_container&) = delete;
 
 	inline item_container();
-	//inline item_container(item_state state);
 
 	inline void store(const T& in);
 	inline void store(T&& in);
@@ -1397,11 +1384,12 @@ inline void item_container<T>::try_move(U& out)
 }
 enum class item_state : uint8_t
 {
-	Empty = 0,
-	Valid = 1,
-	Failed = 2,
-	Dummy = 3,
+	Valid = 0,
+	Consumed = 1 << 0,
+	Failed = 1 << 1,
+	Dummy = Consumed | Failed,
 };
+
 template <class Dummy>
 std::size_t log2_align(std::size_t from, std::size_t clamp)
 {
@@ -1677,19 +1665,28 @@ class state_container
 public:
 	state_container(size_type capacity, item_state* stateBlock);
 
-	void set_state(size_type index, item_state state); // Hmm : )
-	//void set_state_all();
+	inline void initialize(size_type capacity, item_state state);
+	inline void set_state(size_type index, item_state state); 
+	inline void set_state_all_lanes(size_type index, item_state state);
+
+	bool valid(size_type index) const;
+	bool contains(size_type index, item_state state) const;
 
 private:
 	static std::atomic<uint8_t> ourStateLaneIterator;
 
-	const size_type myCapacity;
 	item_state* const myLanes[4];
 };
 template<class Dummy>
 inline state_container<Dummy>::state_container(size_type capacity, item_state * stateBlock)
 	: myLanes{&stateBlock[0], &stateBlock[(capacity / 4) * 1], &stateBlock[(capacity / 4) * 2], &stateBlock[(capacity / 4) * 3], }
 {
+	initialize(capacity, item_state::Consumed);
+}
+template<class Dummy>
+inline void state_container<Dummy>::initialize(size_type capacity, item_state state)
+{
+	memset(myLanes[0], static_cast<uint8_t>(state), capacity * 4);
 }
 template<class Dummy>
 inline void state_container<Dummy>::set_state(size_type index, item_state state)
@@ -1697,6 +1694,32 @@ inline void state_container<Dummy>::set_state(size_type index, item_state state)
 	static thread_local const uint8_t ourStateLane(ourStateLaneIterator.fetch_add(1, std::memory_order_acq_rel));
 
 	myLanes[ourStateLane][index] = state;
+}
+template<class Dummy>
+inline void state_container<Dummy>::set_state_all_lanes(size_type index, item_state state)
+{
+	myLanes[0][index] = state;
+	myLanes[1][index] = state;
+	myLanes[2][index] = state;
+	myLanes[3][index] = state;
+}
+template<class Dummy>
+inline bool state_container<Dummy>::valid(size_type index) const
+{
+	uint8_t result(0);
+	for (uint8_t i = 0; i < 4 & !result; ++i) {
+		result = static_cast<uint8_t>(myLanes[i][index]);
+	}
+	return false;
+}
+template<class Dummy>
+inline bool state_container<Dummy>::contains(size_type index, item_state state) const
+{
+	item_state result(item_state::Valid);
+	for (uint8_t i = 0; i < 4 & !static_cast<uint8_t>(result); ++i) {
+		result = myLanes[i][index];
+	}
+	return result == state;
 }
 }
 template <class T, class Allocator>
@@ -1711,5 +1734,7 @@ template <class T, class Allocator>
 thread_local cqdetail::accessor_cache<T, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourLastConsumerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
 template <class T, class Allocator>
 thread_local cqdetail::accessor_cache<T, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourLastProducerCache{ &concurrent_queue<T, Allocator>::ourDummyContainer.myDummyRawBuffer, nullptr };
+template <class Dummy>
+std::atomic<uint8_t> cqdetail::state_container<Dummy>::ourStateLaneIterator(0);
 }
 #pragma warning(pop)
