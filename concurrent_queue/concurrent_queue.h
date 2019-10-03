@@ -105,9 +105,6 @@ class store_array_deleter;
 enum class item_state : uint8_t;
 
 template <class Dummy>
-class state_container;
-
-template <class Dummy>
 std::size_t log2_align(std::size_t from, std::size_t clamp);
 
 template <class T, class Allocator>
@@ -1670,33 +1667,6 @@ inline dummy_container<T, Allocator>::dummy_container()
 	, myDummyRawBuffer(1, &myDummyState, nullptr)
 {
 	myDummyBuffer = dummy_type{ &myDummyRawBuffer, [](buffer_type*, allocator_adapter_type&) {} };
-}
-template <class Dummy>
-class state_container
-{
-public:
-	state_container(size_type capacity, item_state* stateBlock);
-
-	void set_state(size_type index, item_state state); // Hmm : )
-	//void set_state_all();
-
-private:
-	static std::atomic<uint8_t> ourStateLaneIterator;
-
-	const size_type myCapacity;
-	item_state* const myLanes[4];
-};
-template<class Dummy>
-inline state_container<Dummy>::state_container(size_type capacity, item_state * stateBlock)
-	: myLanes{&stateBlock[0], &stateBlock[(capacity / 4) * 1], &stateBlock[(capacity / 4) * 2], &stateBlock[(capacity / 4) * 3], }
-{
-}
-template<class Dummy>
-inline void state_container<Dummy>::set_state(size_type index, item_state state)
-{
-	static thread_local const uint8_t ourStateLane(ourStateLaneIterator.fetch_add(1, std::memory_order_acq_rel));
-
-	myLanes[ourStateLane][index] = state;
 }
 }
 template <class T, class Allocator>
