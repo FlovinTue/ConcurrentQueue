@@ -518,9 +518,12 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 		const std::size_t stateOffset(stateBegin - totalBlockBegin);
 		const std::size_t dataOffset(dataBegin - totalBlockBegin);
 
-		state = new (totalBlock + stateOffset) cqdetail::item_state[log2size]{};
+		state = new (totalBlock + stateOffset) cqdetail::item_state[stateBlockSize];
 		data = new (totalBlock + dataOffset) cqdetail::item_container<T>[log2size];
 		buffer = new(totalBlock + bufferOffset) buffer_type(static_cast<size_type>(log2size), state, data);
+
+		std::fill(state, state + stateBlockSize, cqdetail::item_state::Consumed);
+
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
@@ -930,7 +933,7 @@ inline bool producer_buffer<T, Allocator>::is_active() const
 template<class T, class Allocator>
 inline bool producer_buffer<T, Allocator>::is_valid() const
 {
-	return myStateContainer.contains(myWriteSlot % myCapacity, item_state::Dummy);
+	return !myStateContainer.contains(myWriteSlot % myCapacity, item_state::Dummy);
 }
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::invalidate()
@@ -1082,7 +1085,7 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myPreReadIterator.store(postWrite, std::memory_order_relaxed);
 	myReadSlot.store(postWrite, std::memory_order_relaxed);
 
-	myStateContainer.initialize(myCapacity, item_state::Consumed);
+	myStateContainer.re_initialize(myCapacity, item_state::Consumed);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myFailiureCount.store(0, std::memory_order_relaxed);
@@ -1665,7 +1668,7 @@ class state_container
 public:
 	state_container(size_type capacity, item_state* stateBlock);
 
-	inline void initialize(size_type capacity, item_state state);
+	inline void re_initialize(size_type capacity, item_state state);
 	inline void set_state(size_type index, item_state state); 
 	inline void set_state_all_lanes(size_type index, item_state state);
 
@@ -1681,17 +1684,16 @@ template<class Dummy>
 inline state_container<Dummy>::state_container(size_type capacity, item_state * stateBlock)
 	: myLanes{&stateBlock[0], &stateBlock[(capacity / 4) * 1], &stateBlock[(capacity / 4) * 2], &stateBlock[(capacity / 4) * 3], }
 {
-	initialize(capacity, item_state::Consumed);
 }
 template<class Dummy>
-inline void state_container<Dummy>::initialize(size_type capacity, item_state state)
+inline void state_container<Dummy>::re_initialize(size_type capacity, item_state state)
 {
 	memset(myLanes[0], static_cast<uint8_t>(state), capacity * 4);
 }
 template<class Dummy>
 inline void state_container<Dummy>::set_state(size_type index, item_state state)
 {
-	static thread_local const uint8_t ourStateLane(ourStateLaneIterator.fetch_add(1, std::memory_order_acq_rel));
+	static thread_local const uint8_t ourStateLane(ourStateLaneIterator.fetch_add(1, std::memory_order_acq_rel) % 4);
 
 	myLanes[ourStateLane][index] = state;
 }
@@ -1710,7 +1712,7 @@ inline bool state_container<Dummy>::valid(size_type index) const
 	for (uint8_t i = 0; i < 4 & !result; ++i) {
 		result = static_cast<uint8_t>(myLanes[i][index]);
 	}
-	return false;
+	return !result;
 }
 template<class Dummy>
 inline bool state_container<Dummy>::contains(size_type index, item_state state) const
