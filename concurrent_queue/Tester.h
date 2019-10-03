@@ -20,7 +20,7 @@ class queue_mutex_wrapper
 {
 public:
 
-	bool try_pop(T& out){
+	bool try_pop(T& out) {
 		mtx.lock();
 		if (myQueue.empty()) {
 			mtx.unlock();
@@ -42,7 +42,7 @@ public:
 	std::queue<T> myQueue;
 };
 
-const uint32_t Writes = 2048; 
+const uint32_t Writes = 2048;
 const uint32_t Writers = std::thread::hardware_concurrency() / 2;
 const uint32_t Readers = std::thread::hardware_concurrency() / 2;
 const uint32_t WritesPerThread(Writes / Writers);
@@ -88,7 +88,7 @@ private:
 };
 
 template<class T, class Allocator>
-inline Tester<T, Allocator>::Tester(Allocator& 
+inline Tester<T, Allocator>::Tester(Allocator&
 #ifdef GDUL	
 	alloc
 #endif
@@ -116,6 +116,8 @@ inline Tester<T, Allocator>::~Tester()
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t runs)
 {
+	myQueue.unsafe_reset();
+
 	double result(0.0);
 
 	for (uint32_t i = 0; i < runs; ++i) {
@@ -158,6 +160,8 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t runs)
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteSingleThread(uint32_t runs)
 {
+	myQueue.unsafe_reset();
+
 	double result(0.0);
 
 	for (uint32_t i = 0; i < runs; ++i) {
@@ -185,6 +189,8 @@ inline double Tester<T, Allocator>::ExecuteSingleThread(uint32_t runs)
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteSingleProducerSingleConsumer(uint32_t runs)
 {
+	myQueue.unsafe_reset();
+
 	double result(0.0);
 
 	for (uint32_t i = 0; i < runs; ++i) {
@@ -216,6 +222,8 @@ inline double Tester<T, Allocator>::ExecuteSingleProducerSingleConsumer(uint32_t
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteRead(uint32_t runs)
 {
+	myQueue.unsafe_reset();
+
 	double result(0.0);
 
 	for (uint32_t i = 0; i < runs; ++i) {
@@ -252,6 +260,8 @@ inline double Tester<T, Allocator>::ExecuteRead(uint32_t runs)
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteWrite(uint32_t runs)
 {
+	myQueue.unsafe_reset();
+
 	double result(0.0);
 
 	for (uint32_t i = 0; i < runs; ++i) {
@@ -330,7 +340,7 @@ inline void Tester<T, Allocator>::Write(uint32_t writes)
 #endif
 
 	myWrittenSum += sum;
-	
+
 	++myWaiting;
 
 	while (myWaiting < (Writers + Readers)) {
@@ -345,7 +355,7 @@ inline void Tester<T, Allocator>::Read(uint32_t reads)
 
 	uint32_t sum(0);
 
-	T out{0};
+	T out{ 0 };
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	for (uint32_t j = 0; j < reads;) {
 		while (true) {
@@ -368,7 +378,7 @@ inline void Tester<T, Allocator>::Read(uint32_t reads)
 #ifndef MOODYCAMEL
 			if (myQueue.try_pop(out)) {
 #else
-				if (myQueue.try_dequeue(out)) {
+			if (myQueue.try_dequeue(out)) {
 #endif
 				sum += out.count;
 				break;
@@ -376,8 +386,8 @@ inline void Tester<T, Allocator>::Read(uint32_t reads)
 			else {
 				std::this_thread::yield();
 			}
+			}
 		}
-	}
 #endif
 	myReadSum += sum;
 
@@ -386,5 +396,5 @@ inline void Tester<T, Allocator>::Read(uint32_t reads)
 	while (myWaiting < (Writers + Readers)) {
 		std::this_thread::yield();
 	}
-}
+	}
 
