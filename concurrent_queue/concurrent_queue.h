@@ -113,6 +113,9 @@ constexpr std::size_t to_offset_item_index(std::size_t index);
 template <class T>
 constexpr std::size_t to_offset_state_index(std::size_t index);
 
+template <class T>
+class item_block_container;
+
 template <class T, class Allocator>
 std::size_t calc_block_size(std::size_t fromCapacity);
 
@@ -143,6 +146,7 @@ typedef std::size_t size_type;
 // Not quite size_type max because we need some leaway in case we
 // need to throw consumers out of a buffer whilst repairing it
 static constexpr size_type Buffer_Capacity_Max = ~(std::numeric_limits<size_type>::max() >> 3) / 2;
+
 }
 // The WizardLoaf MPMC unbounded lock-free queue.
 // FIFO is respected within the context of single producers. 
@@ -1434,21 +1438,6 @@ std::size_t log2_align(std::size_t from, std::size_t clamp)
 
 	return clampedNextVal;
 }
-template<class T>
-constexpr std::size_t to_offset_item_index(std::size_t index)
-{
-	constexpr std::size_t itemSize(sizeof(T));
-	constexpr std::size_t numCacheLines(itemSize / CQ_CACHELINE_SIZE);
-	constexpr std::size_t maxItemsPerCacheline(CQ_CACHELINE_SIZE / itemSize);
-
-	return std::size_t();
-}
-template<class T>
-constexpr std::size_t to_offset_state_index(std::size_t index)
-{
-	index;
-	return std::size_t();
-}
 template<class T, class Allocator>
 std::size_t calc_block_size(std::size_t fromCapacity)
 {
@@ -1591,6 +1580,95 @@ public:
 	item_container<T> myDummyItem;
 	producer_buffer<T, allocator_type> myDummyRawBuffer;
 };
+template <class T>
+class item_block_container
+{
+public:
+
+	template <class ...Arg>
+	inline void construct(size_type items, Arg && ...in);
+	inline void deconstruct(size_type items) noexcept;
+
+	inline constexpr uint8_t max_items() const;
+
+	inline constexpr T& get_item(size_type index);
+	inline constexpr const T& get_item(size_type index) const;
+
+	inline constexpr item_state get_state(size_type index) const;
+	inline constexpr void set_state(size_type index, item_state state);
+
+private:
+	union
+	{
+		T myItems[max_items()];
+		item_state myState[64];
+	};
+};
+template<class T>
+template <class ...Arg>
+inline void item_block_container<T>::construct(size_type items, Arg && ...in)
+{
+	for (uint8_t i = 0; i < items; ++i) {
+		new (&myItems[i]) T(std::forward<Arg&&>(in)...);
+		set_state(i, item_state::Empty);
+	}
+}
+
+template<class T>
+inline void item_block_container<T>::deconstruct(size_type items) noexcept
+{
+	for (uint8_t i = 0; i < items; ++i) {
+		myItems[i].~T();
+		set_state(i, item_state::Empty);
+	}
+}
+
+template<class T>
+inline constexpr uint8_t item_block_container<T>::max_items() const
+{
+	uint8_t fit(1);
+	for (uint32_t i = 0; i < 64; ++i, ++fit) {
+		constexpr std::size_t size(sizeof(T));
+		constexpr std::size_t nextFit(fit * size);
+		constexpr std::size_t stateSize(fit + 1);
+
+		if (!(nextFit + stateSize <= CQ_CACHELINE_SIZE)) {
+			break;
+		}
+	}
+	return fit;
+}
+template<class T>
+inline constexpr T & item_block_container<T>::get_item(size_type index)
+{
+	return myItems[index];
+}
+template<class T>
+inline constexpr const T & item_block_container<T>::get_item(size_type index) const
+{
+	return myItems[index];
+}
+template<class T>
+inline constexpr item_state item_block_container<T>::get_state(size_type index) const
+{
+	constexpr union
+	{
+		constexpr T* itemEnd = &myItems[max_items()];;
+		constexpr item_state* itemBegin;
+	};
+
+	return itemBegin[index];
+}
+template<class T>
+inline constexpr void item_block_container<T>::set_state(size_type index, item_state state)
+{
+	constexpr union
+	{
+		constexpr T* itemEnd = &myItems[max_items()];;
+		constexpr item_state* itemBegin;
+	};
+	itemBegin[index] = state;
+}
 template <class IndexType, class Allocator>
 class index_pool
 {
