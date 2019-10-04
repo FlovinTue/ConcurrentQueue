@@ -107,6 +107,12 @@ enum class item_state : uint8_t;
 template <class Dummy>
 std::size_t log2_align(std::size_t from, std::size_t clamp);
 
+template <class T>
+constexpr std::size_t to_offset_item_index(std::size_t index);
+
+template <class T>
+constexpr std::size_t to_offset_state_index(std::size_t index);
+
 template <class T, class Allocator>
 std::size_t calc_block_size(std::size_t fromCapacity);
 
@@ -1427,6 +1433,21 @@ std::size_t log2_align(std::size_t from, std::size_t clamp)
 	const std::size_t clampedNextVal((clamp < nextVal) ? clamp : nextVal);
 
 	return clampedNextVal;
+}
+template<class T>
+constexpr std::size_t to_offset_item_index(std::size_t index)
+{
+	constexpr std::size_t itemSize(sizeof(T));
+	constexpr std::size_t numCacheLines(itemSize / CQ_CACHELINE_SIZE);
+	constexpr std::size_t maxItemsPerCacheline(CQ_CACHELINE_SIZE / itemSize);
+
+	return std::size_t();
+}
+template<class T>
+constexpr std::size_t to_offset_state_index(std::size_t index)
+{
+	index;
+	return std::size_t();
 }
 template<class T, class Allocator>
 std::size_t calc_block_size(std::size_t fromCapacity)
