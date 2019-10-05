@@ -88,8 +88,6 @@ struct consumer_wrapper;
 template <class T, class Allocator>
 class producer_buffer;
 
-template <class T>
-class item_container;
 
 template <class T, class Allocator>
 class dummy_container;
@@ -106,12 +104,6 @@ enum class item_state : uint8_t;
 
 template <class Dummy>
 std::size_t log2_align(std::size_t from, std::size_t clamp);
-
-template <class T>
-constexpr std::size_t to_offset_item_index(std::size_t index);
-
-template <class T>
-constexpr std::size_t to_offset_state_index(std::size_t index);
 
 template <class T>
 class item_block_container;
@@ -808,7 +800,7 @@ public:
 	typedef typename concurrent_queue<T, Allocator>::size_type size_type;
 	typedef typename concurrent_queue<T, Allocator>::allocator_type allocator_type;
 
-	producer_buffer(size_type capacity, item_container<T>* dataBlock);
+	producer_buffer(size_type capacity, item_block_container<T>* dataBlock);
 	~producer_buffer();
 
 	template<class ...Arg>
@@ -872,6 +864,10 @@ private:
 
 	inline void reintegrate_failed_entries(size_type failCount);
 
+	inline void set_state_local(size_type index, item_state state);
+	inline void set_state(size_type index, item_state state);
+	inline item_state get_state(size_type index);
+
 	static constexpr size_type Buffer_Lock_Offset = cqdetail::Buffer_Capacity_Max + Max_Producers;
 
 	std::atomic<size_type> myPreReadIterator;
@@ -892,12 +888,12 @@ private:
 	shared_ptr_slot_type myNext;
 
 	const size_type myCapacity;
-	item_container<T>* const myDataBlock;
+	item_block_container<T>* const myDataBlock;
 
 	std::atomic<bool> myNextState;
 };
 template<class T, class Allocator>
-inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_container<T>* dataBlock)
+inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_block_container<T>* dataBlock)
 	: myNext(nullptr)
 	, myDataBlock(dataBlock)
 	, myCapacity(capacity)
@@ -934,7 +930,7 @@ inline bool producer_buffer<T, Allocator>::is_valid() const
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::invalidate()
 {
-	myDataBlock[myWriteSlot % myCapacity].set_state(item_state::Dummy);
+	set_state(myWriteSlot % myCapacity, item_state::Dummy);
 	if (myNext) {
 		myNext->invalidate();
 	}
@@ -1081,7 +1077,7 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myReadSlot.store(postWrite, std::memory_order_relaxed);
 
 	for (size_type i = 0; i < myCapacity; ++i) {
-		myDataBlock[i].set_state_local(item_state::Empty);
+		set_state_local(i, item_state::Empty);
 	}
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
@@ -1103,14 +1099,14 @@ inline bool producer_buffer<T, Allocator>::try_push(Arg && ...in)
 
 	std::atomic_thread_fence(std::memory_order_acquire);
 
-	if (myDataBlock[slot].get_state_local() != item_state::Empty) {
+	if (get_state_local() != item_state::Empty) {
 		--myWriteSlot;
 		return false;
 	}
 
 	write_in(slot, std::forward<Arg>(in)...);
 
-	myDataBlock[slot].set_state_local(item_state::Valid);
+	set_state_local(slot, item_state::Valid);
 
 	myPostWriteIterator.fetch_add(1, std::memory_order_release);
 
@@ -1185,14 +1181,14 @@ template<class T, class Allocator>
 template <class U, std::enable_if_t<CQ_BUFFER_NOTHROW_POP_MOVE(U) || CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::post_pop_cleanup(typename producer_buffer<T, Allocator>::size_type readSlot)
 {
-	myDataBlock[readSlot].set_state(item_state::Empty);
+	set_state(readSlot, item_state::Empty);
 	std::atomic_thread_fence(std::memory_order_release);
 }
 template<class T, class Allocator>
 template <class U, std::enable_if_t<!CQ_BUFFER_NOTHROW_POP_MOVE(U) && !CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::post_pop_cleanup(typename producer_buffer<T, Allocator>::size_type readSlot)
 {
-	myDataBlock[readSlot].set_state(item_state::Empty);
+	set_state(readSlot, item_state::Empty);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myDataBlock[readSlot].reset_ref();
 	myPostReadIterator.fetch_add(1, std::memory_order_release);
@@ -1255,166 +1251,31 @@ inline void producer_buffer<T, Allocator>::reintegrate_failed_entries(typename p
 #endif
 }
 
-// used to be able to redirect access to data in the event
-// of an exception being thrown
-template <class T>
-class item_container
+template<class T, class Allocator>
+inline void producer_buffer<T, Allocator>::set_state_local(size_type index, item_state state)
 {
-public:
-	item_container<T>(const item_container<T>&) = delete;
-	item_container<T>& operator=(const item_container&) = delete;
+	const size_type blockIndex(index / item_block_container<T>::max_items);
+	const size_type internalIndex(index % item_block_container<T>::max_items);
 
-	inline item_container();
-	inline item_container(item_state state);
-
-	inline void store(const T& in);
-	inline void store(T&& in);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	inline void redirect(item_container<T>& to);
-#endif
-	template<class U = T, std::enable_if_t<std::is_move_assignable<U>::value>* = nullptr>
-	inline void try_move(U& out);
-	template<class U = T, std::enable_if_t<!std::is_move_assignable<U>::value>* = nullptr>
-	inline void try_move(U& out);
-
-	inline void assign(T& out);
-	inline void move(T& out);
-
-	inline item_state get_state_local() const;
-	inline void set_state(item_state state);
-	inline void set_state_local(item_state state);
-
-	inline void reset_ref();
-
-private:
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	// May or may not reference this continer
-	inline item_container<T>& reference() const;
-
-#endif
-	T myData;
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	union
-	{
-		uint64_t myStateBlock;
-		item_container<T>* myReference;
-		struct
-		{
-			uint16_t trash[3];
-			item_state myState;
-		};
-	};
-#else
-	item_state myState;
-#endif
-};
-template<class T>
-inline item_container<T>::item_container()
-	: myData()
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	, myReference(this)
-#else
-	, myState(item_state::Empty)
-#endif
-{
-}
-template<class T>
-inline item_container<T>::item_container(item_state state)
-	: myState(state)
-{
-}
-template<class T>
-inline void item_container<T>::store(const T & in)
-{
-	myData = in;
-	reset_ref();
-}
-template<class T>
-inline void item_container<T>::store(T && in)
-{
-	myData = std::move(in);
-	reset_ref();
-}
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-template<class T>
-inline void item_container<T>::redirect(item_container<T>& to)
-{
-	const uint64_t otherPtrBlock(to.myStateBlock & Ptr_Mask);
-	myStateBlock &= ~Ptr_Mask;
-	myStateBlock |= otherPtrBlock;
-}
-#endif
-template<class T>
-inline void item_container<T>::assign(T & out)
-{
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	out = reference().myData;
-#else
-	out = myData;
-#endif
-}
-template<class T>
-inline void item_container<T>::move(T & out)
-{
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	out = std::move(reference().myData);
-#else
-	out = std::move(myData);
-#endif
-}
-template<class T>
-inline void item_container<T>::set_state(item_state state)
-{
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	reference().myState = state;
-#else
-	myState = state;
-#endif
+	myDataBlock[blockIndex].set_state_local(internalIndex, state);
 }
 
-template<class T>
-inline void item_container<T>::set_state_local(item_state state)
+template<class T, class Allocator>
+inline void producer_buffer<T, Allocator>::set_state(size_type index, item_state state)
 {
-	myState = state;
+	const size_type blockIndex(index / item_block_container<T>::max_items);
+	const size_type internalIndex(index % item_block_container<T>::max_items);
+
+	myDataBlock[blockIndex].set_state(internalIndex, state);
 }
-template<class T>
-inline void item_container<T>::reset_ref()
+
+template<class T, class Allocator>
+inline item_state producer_buffer<T, Allocator>::get_state(size_type index)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	myReference = this;
-#endif
-}
-template<class T>
-inline item_state item_container<T>::get_state_local() const
-{
-	return myState;
-}
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-template<class T>
-inline item_container<T>& item_container<T>::reference() const
-{
-	return *reinterpret_cast<item_container<T>*>(myStateBlock & Ptr_Mask);
-}
-#endif
-template<class T>
-template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
-inline void item_container<T>::try_move(U& out)
-{
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	out = std::move(reference().myData);
-#else
-	out = std::move(myData);
-#endif
-}
-template<class T>
-template<class U, std::enable_if_t<!std::is_move_assignable<U>::value>*>
-inline void item_container<T>::try_move(U& out)
-{
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
-	out = reference().myData;
-#else
-	out = myData;
-#endif
+	const size_type blockIndex(index / item_block_container<T>::max_items);
+	const size_type internalIndex(index % item_block_container<T>::max_items);
+
+	return myDataBlock[blockIndex].get_state(internalIndex);
 }
 
 enum class item_state : uint8_t
@@ -1437,34 +1298,6 @@ std::size_t log2_align(std::size_t from, std::size_t clamp)
 	const std::size_t clampedNextVal((clamp < nextVal) ? clamp : nextVal);
 
 	return clampedNextVal;
-}
-template<class T, class Allocator>
-std::size_t calc_block_size(std::size_t fromCapacity)
-{
-	typedef typename concurrent_queue<T, Allocator>::buffer_type buffer_type;
-	typedef typename concurrent_queue<T, Allocator>::allocator_adaptor_type allocator_adaptor_type;
-	typedef buffer_deleter<buffer_type, allocator_adaptor_type> deleter_type;
-
-	const std::size_t log2size(cqdetail::log2_align(fromCapacity, cqdetail::Buffer_Capacity_Max));
-
-	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block_claim_custom_delete<buffer_type, allocator_adaptor_type, deleter_type>));
-	const std::size_t alignOfData(alignof(T));
-	const std::size_t alignOfBuffer(alignof(buffer_type));
-
-	const std::size_t maxAlignBuffData(alignOfBuffer < alignOfData ? alignOfData : alignOfBuffer);
-	const std::size_t maxAlign(maxAlignBuffData < alignOfControlBlock ? alignOfControlBlock : maxAlignBuffData);
-
-	const std::size_t bufferByteSize(sizeof(buffer_type));
-	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
-	const std::size_t controlBlockByteSize(shared_ptr_slot_type::Alloc_Size_Claim);
-
-	const std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, maxAlign));
-	const std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, maxAlign));
-	const std::size_t dataBlockSize(cqdetail::aligned_size<void>(dataBlockByteSize, maxAlign));
-
-	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + maxAlign);
-
-	return totalBlockSize;
 }
 template <class Dummy>
 inline uint8_t to_store_array_slot(uint16_t producerIndex)
@@ -1581,94 +1414,161 @@ public:
 	producer_buffer<T, allocator_type> myDummyRawBuffer;
 };
 template <class T>
-class item_block_container
+class alignas(alignof(T)) item_block_container
 {
 public:
-
 	template <class ...Arg>
-	inline void construct(size_type items, Arg && ...in);
-	inline void deconstruct(size_type items) noexcept;
+	item_block_container(Arg&& ...in);
+	~item_block_container() noexcept;
 
-	inline constexpr uint8_t max_items() const;
+	inline item_state get_state(size_type index) const;
+	inline void set_state(size_type index, item_state state);
+	inline void set_state_local(size_type index, item_state);
 
-	inline constexpr T& get_item(size_type index);
-	inline constexpr const T& get_item(size_type index) const;
+	using set_state_local = set_state;
 
-	inline constexpr item_state get_state(size_type index) const;
-	inline constexpr void set_state(size_type index, item_state state);
+	inline void store(const T& in, size_type index);
+	inline void store(T&& in, size_type index);
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	inline void redirect(item_container<T>& to, size_type index);
+#endif
+	template<class U = T, std::enable_if_t<std::is_move_assignable<U>::value>* = nullptr>
+	inline void try_move(U& out, size_type index);
+	template<class U = T, std::enable_if_t<!std::is_move_assignable<U>::value>* = nullptr>
+	inline void try_move(U& out, size_type index);
 
+	inline void assign(T& out, size_type index);
+	inline void move(T& out, size_type index);
+
+	inline void reset_ref(size_type index);
+
+	static constexpr uint8_t max_items = CQ_CACHELINE_SIZE / (sizeof(T) + 1) + !(CQ_CACHELINE_SIZE / (sizeof(T) + 1));
 private:
+	static constexpr std::size_t state_item_block_size = (sizeof(T) < CQ_CACHELINE_SIZE) ? CQ_CACHELINE_SIZE : (sizeof(T) + 1);
+
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	// May or may not reference this continer
+	inline item_container<T>& reference() const;
+#endif
+
 	union
 	{
-		T myItems[max_items()];
-		item_state myState[64];
+		T myItems[max_items];
+		item_state myState[state_item_block_size];
 	};
 };
 template<class T>
-template <class ...Arg>
-inline void item_block_container<T>::construct(size_type items, Arg && ...in)
+template<class ...Arg>
+inline item_block_container<T>::item_block_container(Arg && ...in)
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+: myReference(this)
+#endif
 {
-	for (uint8_t i = 0; i < items; ++i) {
+	for (uint8_t i = 0; i < max_items; ++i) {
 		new (&myItems[i]) T(std::forward<Arg&&>(in)...);
 		set_state(i, item_state::Empty);
 	}
 }
 
 template<class T>
-inline void item_block_container<T>::deconstruct(size_type items) noexcept
+inline item_block_container<T>::~item_block_container() noexcept
 {
-	for (uint8_t i = 0; i < items; ++i) {
+	for (uint8_t i = 0; i < max_items; ++i) {
 		myItems[i].~T();
 		set_state(i, item_state::Empty);
 	}
 }
+template<class T>
+inline item_state item_block_container<T>::get_state(size_type index) const
+{
+	const item_state* stateBegin(reinterpret_cast<const item_state*>(&myItems[max_items]));
+	return stateBegin[index];
+}
+template<class T>
+inline void item_block_container<T>::set_state(size_type index, item_state state)
+{
+	item_state* stateBegin(reinterpret_cast<item_state*>(&myItems[max_items]));
+	stateBegin[index] = state;
+}
+template<class T>
+inline void item_block_container<T>::set_state_local(size_type index, item_state)
+{
+	set_state(index, state);
+}
+template<class T>
+inline void item_block_container<T>::store(const T & in, size_type index)
+{
+	myItems[index] = in;
+	reset_ref();
+}
+template<class T>
+inline void item_block_container<T>::store(T && in, size_type index)
+{
+	myItems[index] = std::move(in);
+	reset_ref();
+}
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+template<class T>
+inline void item_block_container<T>::redirect(item_container<T>& to, size_type index)
+{
+	const uint64_t otherPtrBlock(to.myStateBlock & Ptr_Mask);
+	myStateBlock &= ~Ptr_Mask;
+	myStateBlock |= otherPtrBlock;
+}
+#endif
+template<class T>
+inline void item_block_container<T>::assign(T & out, size_type index)
+{
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	out = reference().myData;
+#else
+	out = myItems[index];
+#endif
+}
+template<class T>
+inline void item_block_container<T>::move(T & out, size_type index)
+{
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	out = std::move(reference().myData);
+#else
+	out = std::move(myItems[index]);
+#endif
+}
+template<class T>
+inline void item_block_container<T>::reset_ref(size_type index)
+{
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	myReference = this;
+#endif
+}
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+template<class T>
+inline item_container<T>& item_container<T>::reference(size_type index) const
+{
+	return *reinterpret_cast<item_container<T>*>(myStateBlock & Ptr_Mask);
+}
+#endif
+template<class T>
+template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
+inline void item_block_container<T>::try_move(U& out, size_type index)
+{
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	out = std::move(reference().myData);
+#else
+	out = std::move(myItems[index]);
+#endif
+}
+template<class T>
+template<class U, std::enable_if_t<!std::is_move_assignable<U>::value>*>
+inline void item_block_container<T>::try_move(U& out, size_type index)
+{
+#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+	out = reference().myData;
+#else
+	out = myItems[index];
+#endif
+}
 
-template<class T>
-inline constexpr uint8_t item_block_container<T>::max_items() const
-{
-	uint8_t fit(1);
-	for (uint32_t i = 0; i < 64; ++i, ++fit) {
-		constexpr std::size_t size(sizeof(T));
-		constexpr std::size_t nextFit(fit * size);
-		constexpr std::size_t stateSize(fit + 1);
-
-		if (!(nextFit + stateSize <= CQ_CACHELINE_SIZE)) {
-			break;
-		}
-	}
-	return fit;
-}
-template<class T>
-inline constexpr T & item_block_container<T>::get_item(size_type index)
-{
-	return myItems[index];
-}
-template<class T>
-inline constexpr const T & item_block_container<T>::get_item(size_type index) const
-{
-	return myItems[index];
-}
-template<class T>
-inline constexpr item_state item_block_container<T>::get_state(size_type index) const
-{
-	constexpr union
-	{
-		constexpr T* itemEnd = &myItems[max_items()];;
-		constexpr item_state* itemBegin;
-	};
-
-	return itemBegin[index];
-}
-template<class T>
-inline constexpr void item_block_container<T>::set_state(size_type index, item_state state)
-{
-	constexpr union
-	{
-		constexpr T* itemEnd = &myItems[max_items()];;
-		constexpr item_state* itemBegin;
-	};
-	itemBegin[index] = state;
-}
 template <class IndexType, class Allocator>
 class index_pool
 {
