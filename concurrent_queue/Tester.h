@@ -116,7 +116,9 @@ inline Tester<T, Allocator>::~Tester()
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t runs)
 {
+#ifdef GDUL
 	myQueue.unsafe_reset();
+#endif
 
 	double result(0.0);
 
@@ -160,8 +162,9 @@ inline double Tester<T, Allocator>::ExecuteConcurrent(uint32_t runs)
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteSingleThread(uint32_t runs)
 {
+#ifdef GDUL
 	myQueue.unsafe_reset();
-
+#endif
 	double result(0.0);
 
 	for (uint32_t i = 0; i < runs; ++i) {
@@ -189,7 +192,9 @@ inline double Tester<T, Allocator>::ExecuteSingleThread(uint32_t runs)
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteSingleProducerSingleConsumer(uint32_t runs)
 {
+#ifdef GDUL
 	myQueue.unsafe_reset();
+#endif
 
 	double result(0.0);
 
@@ -222,7 +227,9 @@ inline double Tester<T, Allocator>::ExecuteSingleProducerSingleConsumer(uint32_t
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteRead(uint32_t runs)
 {
+#ifdef GDUL
 	myQueue.unsafe_reset();
+#endif
 
 	double result(0.0);
 
@@ -260,7 +267,9 @@ inline double Tester<T, Allocator>::ExecuteRead(uint32_t runs)
 template<class T, class Allocator>
 inline double Tester<T, Allocator>::ExecuteWrite(uint32_t runs)
 {
+#ifdef GDUL
 	myQueue.unsafe_reset();
+#endif
 
 	double result(0.0);
 
