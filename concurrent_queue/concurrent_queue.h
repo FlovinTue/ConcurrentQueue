@@ -509,7 +509,13 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 		const std::size_t bufferOffset(bufferBegin - totalBlockBegin);
 		const std::size_t dataOffset(dataBegin - totalBlockBegin);
 
-		data = new (totalBlock + dataOffset) cqdetail::item_container<T>[log2size];
+		// new (addr) (arr[n]) is unreliable...
+		data = reinterpret_cast<cqdetail::item_container<T>*>(totalBlock + dataOffset);
+		for (std::size_t i = 0; i < log2size; ++i) {
+			cqdetail::item_container<T>* const item(&data[i]);
+			new (item) (cqdetail::item_container<T>);
+		}
+
 		buffer = new(totalBlock + bufferOffset) buffer_type(static_cast<size_type>(log2size), data);
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	}
