@@ -486,7 +486,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 	const std::size_t bufferByteSize(sizeof(buffer_type));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
 	const std::size_t controlBlockByteSize(shared_ptr_slot_type::alloc_size_claim());
-	const std::size_t stateBlockByteSize(log2size);
+	const std::size_t stateBlockByteSize(log2size * sizeof(cqdetail::item_state));
 
 	const std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, maxAlign));
 	const std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, maxAlign));
@@ -1081,7 +1081,7 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myPreReadIterator.store(postWrite, std::memory_order_relaxed);
 	myReadSlot.store(postWrite, std::memory_order_relaxed);
 
-	memset(myStateBlock, 0, myCapacity);
+	std::fill(myStateBlock, myStateBlock + myCapacity, item_state::Empty);
 
 #ifdef CQ_ENABLE_EXCEPTIONHANDLING
 	myFailiureCount.store(0, std::memory_order_relaxed);
