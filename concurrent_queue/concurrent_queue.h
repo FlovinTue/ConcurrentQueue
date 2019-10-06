@@ -476,22 +476,17 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 {
 	const std::size_t log2size(cqdetail::log2_align<void>(withSize, cqdetail::Buffer_Capacity_Max));
 
-	const std::size_t alignOfControlBlock(alignof(aspdetail::control_block_claim_custom_delete<buffer_type, allocator_adapter_type, cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>>));
 	const std::size_t alignOfData(alignof(T));
-	const std::size_t alignOfBuffer(alignof(buffer_type));
-
-	const std::size_t maxAlignBuffData(alignOfBuffer < alignOfData ? alignOfData : alignOfBuffer);
-	const std::size_t maxAlign(maxAlignBuffData < alignOfControlBlock ? alignOfControlBlock : maxAlignBuffData);
 
 	const std::size_t bufferByteSize(sizeof(buffer_type));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
 	const std::size_t controlBlockByteSize(shared_ptr_slot_type::alloc_size_claim());
 
-	const std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, maxAlign));
-	const std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, maxAlign));
-	const std::size_t dataBlockSize(cqdetail::aligned_size<void>(dataBlockByteSize, maxAlign));
+	const std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, 8));
+	const std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, 8));
+	const std::size_t dataBlockSize(dataBlockByteSize);
 
-	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + maxAlign);
+	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + alignOfData);
 
 	uint8_t* totalBlock(nullptr);
 
@@ -504,9 +499,12 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 		totalBlock = myAllocator.allocate(totalBlockSize);
 
 		const std::size_t totalBlockBegin(reinterpret_cast<std::size_t>(totalBlock));
-		const std::size_t controlBlockBegin(cqdetail::aligned_size<void>(totalBlockBegin, maxAlign));
+		const std::size_t controlBlockBegin(totalBlockBegin);
 		const std::size_t bufferBegin(controlBlockBegin + controlBlockSize);
-		const std::size_t dataBegin(bufferBegin + bufferSize);
+
+		const std::size_t bufferEnd(bufferBegin + bufferSize);
+		const std::size_t dataBeginOffset((bufferEnd % alignOfData ? (alignOfData - (bufferEnd % alignOfData)) : 0));
+		const std::size_t dataBegin(bufferEnd + dataBeginOffset);
 
 		const std::size_t bufferOffset(bufferBegin - totalBlockBegin);
 		const std::size_t dataOffset(dataBegin - totalBlockBegin);
