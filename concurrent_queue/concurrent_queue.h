@@ -24,6 +24,7 @@
 #include <vector>
 #include <limits>
 #include <cassert>
+#include <atomic_shared_ptr.h>
 
 // Exception handling may be enabled for basic exception safety at the cost of 
 // a slight performance decrease
