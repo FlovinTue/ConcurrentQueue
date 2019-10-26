@@ -6,15 +6,20 @@
 			<CustomListItems>
 				<Variable Name = "sizeAccumulator" InitialValue = "0"/>
 				<Variable Name = "producerIndex" InitialValue = "0" />
-				<Variable Name = "producerSlotsRaw" InitialValue="(*(atomic_shared_ptr_slot_type**)(+8
+				<Variable Name = "producerSlotsRaw" InitialValue="(atomic_shared_ptr_slot_type*)0"/>
+				<Variable Name = "pBuffer" InitialValue = "(buffer_type*)(0)" />
+
+				<Exec Condition="producerIndex != (uint64_t)_myProducerCount">
+					producerSlotsRaw = 
+					(*(atomic_shared_ptr_slot_type**)(+8
 					+ ((myProducerSlots.myDebugView.myU64 >> 1) * 2)
 					- ((uint64_t)myProducerSlots.myDebugView.myU8[aspdetail::STORAGE_BYTE_VERSION] * (aspdetail::Ptr_Mask + 1))
 					- ((uint64_t)myProducerSlots.myDebugView.myU8[aspdetail::STORAGE_BYTE_COPYREQUEST] * (aspdetail::Ptr_Mask + 1))
-					))"/>
-				<Variable Name = "pBuffer" InitialValue = "(buffer_type*)(0)" />
+					))
+				</Exec>
 				
 				<Loop>
-					<Break Condition = "producerIndex == myProducerCount._My_val" />
+					<Break Condition = "producerIndex == (uint64_t)_myProducerCount" />
 					<Exec>
 						pBuffer =
 						(*(buffer_type**)(+8
@@ -25,7 +30,7 @@
 					</Exec>
 					<Loop>
 						<Exec>
-							sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)
+							sizeAccumulator += ((uint64_t)pBuffer->_myPostWriteIterator - (uint64_t)pBuffer->_myReadSlot)
 						</Exec>
 						<Break Condition = "pBuffer->myNext.myPtr == 0"/>
 						<Exec>
@@ -38,13 +43,13 @@
 				</Loop>
 
 				<Item Name = "[size]">sizeAccumulator</Item>
-				<Item Name = "[producer_count]">myProducerCount._My_val</Item>
+				<Item Name = "[producer_count]">(uint64_t)_myProducerCount</Item>
 
 				<Exec>pBuffer = 0</Exec>
 				<Exec>producerIndex = 0</Exec>
 				
 				<Loop>
-					<Break Condition = "producerIndex == myProducerCount._My_val" />
+					<Break Condition = "producerIndex == (uint64_t)_myProducerCount" />
 					<Exec>
 						pBuffer =
 						(*(buffer_type**)(+8
@@ -69,11 +74,11 @@
 			<CustomListItems MaxItemsPerView="512">
 				<Variable Name="pBuffer" InitialValue="this" />
 				<Variable Name="itemCount" InitialValue="0"/>
-				<Variable Name="pItem" InitialValue="myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))"/>
+				<Variable Name="pItem" InitialValue="myDataBlock + (uint64_t)(pBuffer->_myReadSlot - ((uint64_t)(pBuffer->_myReadSlot / pBuffer->myCapacity) * pBuffer->myCapacity))"/>
 				<Variable Name="sizeAccumulator" InitialValue="0"/>
 
 				<Loop>
-					<Exec>sizeAccumulator += (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)</Exec>
+					<Exec>sizeAccumulator += ((uint64_t)pBuffer->_myPostWriteIterator - (uint64_t)pBuffer->_myReadSlot)</Exec>
 					<Break Condition="(pBuffer->myNext.myPtr == nullptr)" />
 					<Exec>pBuffer = pBuffer->myNext.myPtr</Exec>
 				</Loop>
@@ -83,16 +88,16 @@
 				<Exec>pBuffer = this</Exec>
 
 				<Loop>
-					<If Condition="itemCount == (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+					<If Condition="itemCount == ((uint64_t)pBuffer->_myPostWriteIterator - (uint64_t)pBuffer->_myReadSlot)">
 						<Break Condition="pBuffer->myNext.myPtr == nullptr" />
 						<Exec>pBuffer = pBuffer->myNext.myPtr</Exec>
-						<Exec>pItem = pBuffer->myDataBlock + (pBuffer->myReadSlot._My_val - ((pBuffer->myReadSlot._My_val / pBuffer->myCapacity) * pBuffer->myCapacity))</Exec>
+						<Exec>pItem = pBuffer->myDataBlock + ((uint64_t)pBuffer->_myReadSlot - (((uint64_t)pBuffer->_myReadSlot / pBuffer->myCapacity) * pBuffer->myCapacity))</Exec>
 						<Exec>itemCount = 0</Exec>
 					</If>
-					<If Condition="itemCount != (pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+					<If Condition="itemCount != ((uint64_t)pBuffer->_myPostWriteIterator - (uint64_t)pBuffer->_myReadSlot)">
 						<Item>pItem->myData</Item>
 						<Exec>++pItem</Exec>
-						<If Condition="pItem == (pBuffer->myDataBlock + pBuffer->myPostWriteIterator._My_val - pBuffer->myReadSlot._My_val)">
+						<If Condition="pItem == (pBuffer->myDataBlock + (uint64_t)pBuffer->_myPostWriteIterator - (uint64_t)pBuffer->_myReadSlot)">
 							<Exec>pItem= pBuffer->myDataBlock</Exec>
 						</If>
 						<Exec>++itemCount</Exec>

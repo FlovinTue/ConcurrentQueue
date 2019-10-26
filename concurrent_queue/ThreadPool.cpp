@@ -48,7 +48,7 @@ void ThreadPool::Idle(uint64_t affinityMask)
 	} while (!result);
 	
 
-	while (myIsInCommission._My_val | (0 < myTaskCounter.load(std::memory_order_acquire)))
+	while (myIsInCommission | (0 < myTaskCounter.load(std::memory_order_acquire)))
 	{
 		std::function<void()> task;
 		if (myTaskQueue.try_pop(task))
