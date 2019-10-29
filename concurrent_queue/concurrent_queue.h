@@ -487,7 +487,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 
 	const std::size_t bufferByteSize(sizeof(buffer_type));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
-	constexpr std::size_t controlBlockByteSize(shared_ptr_slot_type::alloc_size_claim());
+	constexpr std::size_t controlBlockByteSize(shared_ptr_slot_type::template alloc_size_claim_custom_delete<cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>>());
 
 	constexpr std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, 8));
 	constexpr std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, 8));
