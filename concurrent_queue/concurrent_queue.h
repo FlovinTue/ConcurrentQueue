@@ -25,19 +25,18 @@
 #include <limits>
 #include <atomic_shared_ptr.h>
 #include <cassert>
-#include <exception>
 
 // Exception handling may be enabled for basic exception safety at the cost of 
 // a slight performance decrease
 
 
- /* #define CQ_ENABLE_EXCEPTIONHANDLING */
+ /* #define GDUL_CQ_ENABLE_EXCEPTIONHANDLING */
 
 // In the event an exception is thrown during a pop operation, some entries may
 // be dequeued out-of-order as some consumers may already be halfway through a 
 // pop operation before reintegration efforts are started.
 
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING 
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING 
 #define GDUL_CQ_BUFFER_NOTHROW_POP_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
 #define GDUL_CQ_BUFFER_NOTHROW_POP_ASSIGN(type) (!GDUL_CQ_BUFFER_NOTHROW_POP_MOVE(type) && (std::is_nothrow_assignable<type, type&>::value))
 #define GDUL_CQ_BUFFER_NOTHROW_PUSH_MOVE(type) (std::is_nothrow_move_assignable<type>::value)
@@ -81,6 +80,12 @@ namespace gdul
 
 namespace cqdetail
 {
+
+class producer_overflow : public std::runtime_error
+{
+public:
+	producer_overflow(const char* errorMessage) : runtime_error(errorMessage) {}
+};
 
 static constexpr std::uint64_t Ptr_Mask = (std::uint64_t(std::numeric_limits<std::uint32_t>::max()) << 16 | std::uint64_t(std::numeric_limits<std::uint16_t>::max()));
 
@@ -145,7 +150,7 @@ static constexpr size_type Buffer_Capacity_Max = ~(std::numeric_limits<size_type
 }
 // The WizardLoaf MPMC unbounded lock-free queue.
 // FIFO is respected within the context of single producers. 
-// Basic exception safety may be enabled via define CQ_ENABLE_EXCEPTIONHANDLING 
+// Basic exception safety may be enabled via define GDUL_CQ_ENABLE_EXCEPTIONHANDLING 
 // at the price of a slight performance decrease.
 template <class T, class Allocator = std::allocator<std::uint8_t>>
 class concurrent_queue
@@ -181,16 +186,17 @@ public:
 	// reset the structure to its initial state
 	void unsafe_reset();
 
+
 private:
 	friend class cqdetail::producer_buffer<T, allocator_type>;
 	friend class cqdetail::dummy_container<T, allocator_type>;
 
-	typedef cqdetail::producer_buffer<T, allocator_type> buffer_type;
-	typedef cqdetail::shared_ptr_allocator_adaptor<std::uint8_t, allocator_type> allocator_adapter_type;
-	typedef shared_ptr<buffer_type, allocator_adapter_type> shared_ptr_slot_type;
-	typedef atomic_shared_ptr<buffer_type, allocator_adapter_type> atomic_shared_ptr_slot_type;
-	typedef atomic_shared_ptr<atomic_shared_ptr_slot_type, allocator_type> atomic_shared_ptr_array_type;
-	typedef shared_ptr<atomic_shared_ptr_slot_type, allocator_type> shared_ptr_array_type;
+	using buffer_type = cqdetail::producer_buffer<T, allocator_type>;
+	using allocator_adapter_type = cqdetail::shared_ptr_allocator_adaptor<std::uint8_t, allocator_type>;
+	using shared_ptr_slot_type = shared_ptr<buffer_type>;
+	using atomic_shared_ptr_slot_type = atomic_shared_ptr<buffer_type>;
+	using atomic_shared_ptr_array_type = atomic_shared_ptr<atomic_shared_ptr_slot_type>;
+	using shared_ptr_array_type = shared_ptr<atomic_shared_ptr_slot_type>;
 
 	using consumer_vector_allocator = typename std::allocator_traits<allocator_type>::template rebind_alloc<cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>>;
 	using producer_vector_allocator = typename std::allocator_traits<allocator_type>::template rebind_alloc<shared_ptr_slot_type>;
@@ -223,9 +229,6 @@ private:
 	inline void refresh_cached_consumer();
 	inline void refresh_cached_producer();
 
-	const size_type myInitBufferCapacity;
-	const size_type myInstanceIndex;
-
 	static thread_local std::vector<shared_ptr_slot_type, producer_vector_allocator> ourProducers;
 	static thread_local std::vector<cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>, consumer_vector_allocator> ourConsumers;
 
@@ -234,6 +237,9 @@ private:
 
 	static cqdetail::index_pool<size_type, allocator_type> ourIndexPool;
 	static cqdetail::dummy_container<T, allocator_type> ourDummyContainer;
+
+	const size_type myInitBufferCapacity;
+	const size_type myInstanceIndex;
 
 	atomic_shared_ptr_array_type myProducerArrayStore[cqdetail::Producer_Slots_Max_Growth_Count];
 	atomic_shared_ptr_array_type myProducerSlots;
@@ -265,7 +271,7 @@ inline concurrent_queue<T, Allocator>::concurrent_queue(typename concurrent_queu
 }
 template<class T, class Allocator>
 inline concurrent_queue<T, Allocator>::concurrent_queue(size_type initProducerCapacity, Allocator allocator)
-	: myInstanceIndex(ourIndexPool.get())
+	: myInstanceIndex(ourIndexPool.get(allocator))
 	, myProducerCapacity(0)
 	, myProducerCount(0)
 	, myProducerSlotPostIterator(0)
@@ -273,8 +279,8 @@ inline concurrent_queue<T, Allocator>::concurrent_queue(size_type initProducerCa
 	, myProducerSlots(nullptr)
 	, myInitBufferCapacity(cqdetail::log2_align<void>(initProducerCapacity, cqdetail::Buffer_Capacity_Max))
 	, myProducerArrayStore{ nullptr }
-	, myAllocator(allocator)
 	, myRelocationIndex(0)
+	, myAllocator(allocator)
 {
 }
 template<class T, class Allocator>
@@ -478,6 +484,7 @@ inline bool concurrent_queue<T, Allocator>::relocate_consumer()
 	}
 	return false;
 }
+
 template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_queue<T, Allocator>::create_producer_buffer(std::size_t withSize)
 {
@@ -487,20 +494,21 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 
 	const std::size_t bufferByteSize(sizeof(buffer_type));
 	const std::size_t dataBlockByteSize(sizeof(cqdetail::item_container<T>) * log2size);
-	constexpr std::size_t controlBlockByteSize(shared_ptr_slot_type::template alloc_size_claim_custom_delete<cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>>());
+
+	constexpr std::size_t controlBlockByteSize(shared_ptr_slot_type::template alloc_size_claim_custom_delete<allocator_adapter_type, cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>>());
 
 	constexpr std::size_t controlBlockSize(cqdetail::aligned_size<void>(controlBlockByteSize, 8));
 	constexpr std::size_t bufferSize(cqdetail::aligned_size<void>(bufferByteSize, 8));
 	const std::size_t dataBlockSize(dataBlockByteSize);
 
-	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + alignOfData);
+	const std::size_t totalBlockSize(controlBlockSize + bufferSize + dataBlockSize + (8 < alignOfData ? alignOfData : 0));
 
 	std::uint8_t* totalBlock(nullptr);
 
 	buffer_type* buffer(nullptr);
 	cqdetail::item_container<T>* data(nullptr);
 
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	try {
 #endif
 		totalBlock = myAllocator.allocate(totalBlockSize);
@@ -524,7 +532,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 		}
 
 		buffer = new(totalBlock + bufferOffset) buffer_type(static_cast<size_type>(log2size), data);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
 		myAllocator.deallocate(totalBlock, totalBlockSize);
@@ -533,7 +541,6 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type concurrent_
 #endif
 
 	allocator_adapter_type allocAdaptor(totalBlock, totalBlockSize);
-
 
 	shared_ptr_slot_type returnValue(buffer, cqdetail::buffer_deleter<buffer_type, allocator_adapter_type>(), allocAdaptor);
 
@@ -546,9 +553,9 @@ template<class T, class Allocator>
 inline void concurrent_queue<T, Allocator>::push_producer_buffer(shared_ptr_slot_type buffer)
 {
 	const std::uint16_t bufferSlot(claim_store_slot());
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	if (!(bufferSlot < cqdetail::Max_Producers)) {
-		throw std::runtime_error("Max producers exceeded");
+		throw cqdetail::producer_overflow("Max producers exceeded");
 	}
 #endif
 	insert_to_store(std::move(buffer), bufferSlot, cqdetail::to_store_array_slot<void>(bufferSlot));
@@ -660,7 +667,7 @@ template<class T, class Allocator>
 inline std::uint16_t concurrent_queue<T, Allocator>::claim_store_slot()
 {
 	std::uint16_t reservedSlot(std::numeric_limits<std::uint16_t>::max());
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	for (bool foundSlot(false); !foundSlot;) {
 		std::uint16_t expectedSlot(myProducerSlotReservation.load(std::memory_order_relaxed));
 		const std::uint8_t storeArraySlot(cqdetail::to_store_array_slot<void>(expectedSlot));
@@ -750,7 +757,13 @@ template<class T, class Allocator>
 inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type & concurrent_queue<T, Allocator>::this_producer()
 {
 	if (!(myInstanceIndex < ourProducers.size())) {
-		ourProducers.resize(myInstanceIndex + 1, ourDummyContainer.myDummyBuffer);
+		// Make sure to propagate instances of our allocator everywhere
+		if (!ourProducers.capacity()) {
+			ourProducers = decltype(ourProducers)(myInitBufferCapacity + 1, ourDummyContainer.myDummyBuffer, myAllocator);
+		}
+		else {
+			ourProducers.resize(myInstanceIndex + 1, ourDummyContainer.myDummyBuffer);
+		}
 	}
 	return ourProducers[myInstanceIndex];
 }
@@ -758,7 +771,13 @@ template<class T, class Allocator>
 inline cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_slot_type, typename concurrent_queue<T, Allocator>::shared_ptr_array_type>& concurrent_queue<T, Allocator>::this_consumer()
 {
 	if (!(myInstanceIndex < ourConsumers.size())) {
-		ourConsumers.resize(myInstanceIndex + 1, cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>(ourDummyContainer.myDummyBuffer));
+		// Make sure to propagate instances of our allocator everywhere
+		if (!ourConsumers.capacity()) {
+			ourConsumers = decltype(ourConsumers)(myInstanceIndex + 1, cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>(ourDummyContainer.myDummyBuffer), myAllocator);
+		}
+		else {
+			ourConsumers.resize(myInstanceIndex + 1, cqdetail::consumer_wrapper<shared_ptr_slot_type, shared_ptr_array_type>(ourDummyContainer.myDummyBuffer));
+		}
 	}
 	return ourConsumers[myInstanceIndex];
 }
@@ -803,7 +822,8 @@ template <class T, class Allocator>
 class producer_buffer
 {
 private:
-	typedef typename concurrent_queue<T, Allocator>::shared_ptr_slot_type shared_ptr_slot_type;
+	using atomic_shared_ptr_slot_type = typename concurrent_queue<T, Allocator>::atomic_shared_ptr_slot_type;
+	using shared_ptr_slot_type = typename concurrent_queue<T, Allocator>::shared_ptr_slot_type;
 
 public:
 	typedef typename concurrent_queue<T, Allocator>::size_type size_type;
@@ -878,7 +898,7 @@ private:
 	std::atomic<size_type> myPreReadIterator;
 	GDUL_ATOMIC_WITH_VIEW(size_type, myReadSlot);
 
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	std::atomic<size_type> myPostReadIterator;
 	std::atomic<std::uint16_t> myFailiureCount;
 	std::atomic<std::uint16_t> myFailiureIndex;
@@ -890,13 +910,12 @@ private:
 	size_type myWriteSlot;
 	GDUL_ATOMIC_WITH_VIEW(size_type, myPostWriteIterator);
 	GDUL_CQ_PADDING(GDUL_CACHELINE_SIZE - sizeof(size_type) * 2);
-	shared_ptr_slot_type myNext;
+	atomic_shared_ptr_slot_type myNext;
 
 	const size_type myCapacity;
 	item_container<T>* const myDataBlock;
-
-	std::atomic<bool> myNextState;
 };
+
 template<class T, class Allocator>
 inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T, Allocator>::size_type capacity, item_container<T>* dataBlock)
 	: myNext(nullptr)
@@ -906,8 +925,7 @@ inline producer_buffer<T, Allocator>::producer_buffer(typename producer_buffer<T
 	, myPreReadIterator(0)
 	, myWriteSlot(0)
 	, myPostWriteIterator(0)
-	, myNextState(false)
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	, myFailiureIndex(0)
 	, myFailiureCount(0)
 	, myPostReadIterator(0)
@@ -937,22 +955,21 @@ inline void producer_buffer<T, Allocator>::invalidate()
 {
 	myDataBlock[myWriteSlot % myCapacity].set_state(item_state::Dummy);
 	if (myNext) {
-		myNext->invalidate();
+		myNext.unsafe_get_owned()->invalidate();
 	}
 }
 template<class T, class Allocator>
 inline typename producer_buffer<T, Allocator>::shared_ptr_slot_type producer_buffer<T, Allocator>::find_back()
 {
-	bool nextState(myNextState.load(std::memory_order_seq_cst));
 	shared_ptr_slot_type back(nullptr);
 	producer_buffer<T, allocator_type>* inspect(this);
 
-	while (nextState) {
+	while (inspect) {
 		const size_type readSlot(inspect->myReadSlot.load(std::memory_order_relaxed));
 		const size_type postWrite(inspect->myPostWriteIterator.load(std::memory_order_relaxed));
 
 		const bool thisBufferEmpty(readSlot == postWrite);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 		const bool veto(inspect->myFailiureCount.load(std::memory_order_relaxed) != inspect->myFailiureIndex.load(std::memory_order_relaxed));
 		const bool valid(!thisBufferEmpty | veto);
 #else
@@ -961,11 +978,9 @@ inline typename producer_buffer<T, Allocator>::shared_ptr_slot_type producer_buf
 		if (valid) {
 			break;
 		}
-		std::atomic_thread_fence(std::memory_order_seq_cst);
 
-		back = inspect->myNext;
+		back = inspect->myNext.load(std::memory_order_seq_cst);
 		inspect = back.get_owned();
-		nextState = back->myNextState.load(std::memory_order_relaxed);
 	}
 	return back;
 }
@@ -977,8 +992,8 @@ inline typename producer_buffer<T, Allocator>::size_type producer_buffer<T, Allo
 	size_type accumulatedSize(myPostWriteIterator.load(std::memory_order_relaxed));
 	accumulatedSize -= readSlot;
 
-	if (myNextState.load(std::memory_order_seq_cst))
-		accumulatedSize += myNext->size();
+	if (myNext)
+		accumulatedSize += myNext.unsafe_get_owned()->size();
 
 	return accumulatedSize;
 }
@@ -998,7 +1013,7 @@ template<class T, class Allocator>
 template <class U, std::enable_if_t<!GDUL_CQ_BUFFER_NOTHROW_POP_MOVE(U) && !GDUL_CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline bool producer_buffer<T, Allocator>::verify_successor(const shared_ptr_slot_type& successor)
 {
-	if (!myNextState.load(std::memory_order_seq_cst)) {
+	if (!myNext) {
 		return false;
 	}
 
@@ -1015,15 +1030,13 @@ inline bool producer_buffer<T, Allocator>::verify_successor(const shared_ptr_slo
 			}
 		}
 
-		std::atomic_thread_fence(std::memory_order_seq_cst);
-
-		next = inspect->myNext;
+		next = inspect->myNext.load(std::memory_order_seq_cst);
 		inspect = next.get_owned();
 
 		if (inspect == successor.get_owned()) {
 			break;
 		}
-	} while (next->myNextState.load(std::memory_order_relaxed));
+	} while (inspect->myNext);
 
 	return true;
 }
@@ -1036,7 +1049,7 @@ template<class T, class Allocator>
 template <class U, std::enable_if_t<!GDUL_CQ_BUFFER_NOTHROW_POP_MOVE(U) && !GDUL_CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::check_for_damage()
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	const size_type preRead(myPreReadIterator.load(std::memory_order_relaxed));
 	const size_type preReadLockOffset(preRead - Buffer_Lock_Offset);
 	if (preReadLockOffset != myPostReadIterator.load(std::memory_order_relaxed)) {
@@ -1070,15 +1083,14 @@ template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::push_front(shared_ptr_slot_type newBuffer)
 {
 	producer_buffer<T, allocator_type>* last(this);
-	raw_ptr<typename shared_ptr_slot_type::value_type, typename shared_ptr_slot_type::allocator_type> verLast(nullptr);
+	raw_ptr<typename shared_ptr_slot_type::value_type> verLast(nullptr);
 
 	while (last->myNext) {
-		verLast = last->myNext;
+		verLast = last->myNext.unsafe_get_raw_ptr();
 		last = verLast.get_owned();
 	}
-	last->myNext = std::move(newBuffer);
 
-	last->myNextState.store(true, std::memory_order_seq_cst);
+	last->myNext.store(std::move(newBuffer), std::memory_order_seq_cst);
 }
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::unsafe_clear()
@@ -1091,14 +1103,14 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 		myDataBlock[i].set_state_local(item_state::Empty);
 	}
 
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	myFailiureCount.store(0, std::memory_order_relaxed);
 	myFailiureIndex.store(0, std::memory_order_relaxed);
 
 	myPostReadIterator.store(postWrite, std::memory_order_relaxed);
 #endif
 	if (myNext) {
-		myNext->unsafe_clear();
+		myNext.unsafe_get_owned()->unsafe_clear();
 	}
 }
 template<class T, class Allocator>
@@ -1132,7 +1144,7 @@ inline bool producer_buffer<T, Allocator>::try_pop(T & out)
 
 	if (myCapacity < avaliable) {
 		myPreReadIterator.fetch_sub(1, std::memory_order_relaxed);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 		check_for_damage();
 #endif
 		return false;
@@ -1200,7 +1212,7 @@ template <class U, std::enable_if_t<!GDUL_CQ_BUFFER_NOTHROW_POP_MOVE(U) && !GDUL
 inline void producer_buffer<T, Allocator>::post_pop_cleanup(typename producer_buffer<T, Allocator>::size_type readSlot)
 {
 	myDataBlock[readSlot].set_state(item_state::Empty);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	myDataBlock[readSlot].reset_ref();
 	myPostReadIterator.fetch_add(1, std::memory_order_release);
 #else
@@ -1217,11 +1229,11 @@ template <class T, class Allocator>
 template <class U, std::enable_if_t<!GDUL_CQ_BUFFER_NOTHROW_POP_MOVE(U) && !GDUL_CQ_BUFFER_NOTHROW_POP_ASSIGN(U)>*>
 inline void producer_buffer<T, Allocator>::write_out(typename producer_buffer<T, Allocator>::size_type slot, U& out)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	try {
 #endif
 		myDataBlock[slot].try_move(out);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	}
 	catch (...) {
 		if (myFailiureCount.fetch_add(1, std::memory_order_relaxed) == myFailiureIndex.load(std::memory_order_relaxed)) {
@@ -1236,7 +1248,7 @@ inline void producer_buffer<T, Allocator>::write_out(typename producer_buffer<T,
 template<class T, class Allocator>
 inline void producer_buffer<T, Allocator>::reintegrate_failed_entries(typename producer_buffer<T, Allocator>::size_type failCount)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	const size_type readSlotTotal(myReadSlot.load(std::memory_order_relaxed));
 	const size_type readSlotTotalOffset(readSlotTotal + myCapacity);
 
@@ -1276,7 +1288,7 @@ public:
 
 	inline void store(const T& in);
 	inline void store(T&& in);
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	inline void redirect(item_container<T>& to);
 #endif
 	template<class U = T, std::enable_if_t<std::is_move_assignable<U>::value>* = nullptr>
@@ -1294,13 +1306,13 @@ public:
 	inline void reset_ref();
 
 private:
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	// May or may not reference this continer
 	inline item_container<T>& reference() const;
 
 #endif
 	T myData;
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	union
 	{
 		std::uint64_t myStateBlock;
@@ -1318,7 +1330,7 @@ private:
 template<class T>
 inline item_container<T>::item_container()
 	: myData()
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	, myReference(this)
 #else
 	, myState(item_state::Empty)
@@ -1343,7 +1355,7 @@ inline void item_container<T>::store(T && in)
 	myData = std::move(in);
 	reset_ref();
 }
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 template<class T>
 inline void item_container<T>::redirect(item_container<T>& to)
 {
@@ -1355,7 +1367,7 @@ inline void item_container<T>::redirect(item_container<T>& to)
 template<class T>
 inline void item_container<T>::assign(T & out)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	out = reference().myData;
 #else
 	out = myData;
@@ -1364,7 +1376,7 @@ inline void item_container<T>::assign(T & out)
 template<class T>
 inline void item_container<T>::move(T & out)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	out = std::move(reference().myData);
 #else
 	out = std::move(myData);
@@ -1373,7 +1385,7 @@ inline void item_container<T>::move(T & out)
 template<class T>
 inline void item_container<T>::set_state(item_state state)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	reference().myState = state;
 #else
 	myState = state;
@@ -1388,7 +1400,7 @@ inline void item_container<T>::set_state_local(item_state state)
 template<class T>
 inline void item_container<T>::reset_ref()
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	myReference = this;
 #endif
 }
@@ -1397,7 +1409,7 @@ inline item_state item_container<T>::get_state_local() const
 {
 	return myState;
 }
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 template<class T>
 inline item_container<T>& item_container<T>::reference() const
 {
@@ -1408,7 +1420,7 @@ template<class T>
 template<class U, std::enable_if_t<std::is_move_assignable<U>::value>*>
 inline void item_container<T>::try_move(U& out)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	out = std::move(reference().myData);
 #else
 	out = std::move(myData);
@@ -1418,7 +1430,7 @@ template<class T>
 template<class U, std::enable_if_t<!std::is_move_assignable<U>::value>*>
 inline void item_container<T>::try_move(U& out)
 {
-#ifdef CQ_ENABLE_EXCEPTIONHANDLING
+#ifdef GDUL_CQ_ENABLE_EXCEPTIONHANDLING
 	out = reference().myData;
 #else
 	out = myData;
@@ -1523,16 +1535,26 @@ template <class T, class Allocator>
 class shared_ptr_allocator_adaptor : public Allocator
 {
 public:
+	template <typename U>
+	struct rebind
+	{
+		using other = shared_ptr_allocator_adaptor<U, Allocator>;
+	};
+
+	template <class U>
+	shared_ptr_allocator_adaptor(const shared_ptr_allocator_adaptor<U, Allocator>& other)
+		: myAddress(other.myAddress)
+		, mySize(other.mySize)
+	{};
+
 	shared_ptr_allocator_adaptor()
 		: myAddress(nullptr)
 		, mySize(0)
-	{
-	};
+	{};
 	shared_ptr_allocator_adaptor(T* retAddr, std::size_t size)
 		: myAddress(retAddr)
 		, mySize(size)
-	{
-	};
+	{};
 
 	T* allocate(std::size_t count)
 	{
@@ -1578,16 +1600,24 @@ class dummy_container
 {
 public:
 	dummy_container();
-	typedef typename concurrent_queue<T, Allocator>::shared_ptr_slot_type  dummy_type;
-	typedef typename concurrent_queue<T, Allocator>::allocator_adapter_type allocator_adapter_type;
-	typedef typename concurrent_queue<T, Allocator>::buffer_type buffer_type;
-	typedef typename concurrent_queue<T, Allocator>::allocator_type allocator_type;
+	using shared_ptr_slot_type = typename concurrent_queue<T, Allocator>::shared_ptr_slot_type;
+	using allocator_adapter_type = typename concurrent_queue<T, Allocator>::allocator_adapter_type;
+	using buffer_type = typename concurrent_queue<T, Allocator>::buffer_type;
+	using allocator_type = typename concurrent_queue<T, Allocator>::allocator_type;
 
 
-	dummy_type myDummyBuffer;
+	shared_ptr_slot_type myDummyBuffer;
 	item_container<T> myDummyItem;
-	producer_buffer<T, allocator_type> myDummyRawBuffer;
+	buffer_type myDummyRawBuffer;
 };
+template<class T, class Allocator>
+inline dummy_container<T, Allocator>::dummy_container()
+	: myDummyItem(item_state::Dummy)
+	, myDummyRawBuffer(1, &myDummyItem)
+{
+	Allocator alloc;
+	myDummyBuffer = shared_ptr_slot_type( &myDummyRawBuffer, [](buffer_type*, Allocator&) {}, alloc);
+}
 template <class IndexType, class Allocator>
 class index_pool
 {
@@ -1595,22 +1625,29 @@ public:
 	index_pool();
 	~index_pool();
 
-	IndexType get();
+	IndexType get(Allocator& allocator);
 	void add(IndexType index);
 
 	struct node
 	{
-		node(IndexType index, shared_ptr<node, Allocator> next)
+		node(IndexType index, shared_ptr<node> next)
 			: myIndex(index)
 			, myNext(std::move(next))
 		{
 		}
 		IndexType myIndex;
-		atomic_shared_ptr<node, Allocator> myNext;
+		atomic_shared_ptr<node> myNext;
 	};
-	atomic_shared_ptr<node, Allocator> myTop;
+	atomic_shared_ptr<node> myTop;
 
 private:
+	// Pre-allocate 'return entry' (no allocations in destructor)
+	void push_pool_entry(Allocator& allocator);
+	void push_pool_entry(shared_ptr<node> node);
+	shared_ptr<node> get_pool_entry();
+
+	atomic_shared_ptr<node> myTopPool;
+
 	std::atomic<IndexType> myIterator;
 };
 template <class T, class Allocator>
@@ -1662,50 +1699,85 @@ inline index_pool<IndexType, Allocator>::index_pool()
 template<class IndexType, class Allocator>
 inline index_pool<IndexType, Allocator>::~index_pool()
 {
-	shared_ptr<node, Allocator> top(myTop.unsafe_load());
+	shared_ptr<node> top(myTop.unsafe_load());
 	while (top) {
-		shared_ptr<node, Allocator> next(top->myNext.unsafe_load());
+		shared_ptr<node> next(top->myNext.unsafe_load());
 		myTop.unsafe_store(next);
 		top = std::move(next);
 	}
 }
 template<class IndexType, class Allocator>
-inline IndexType index_pool<IndexType, Allocator>::get()
+inline IndexType index_pool<IndexType, Allocator>::get(Allocator& allocator)
 {
-	shared_ptr<node, Allocator> top(myTop.load());
+	shared_ptr<node> top(myTop.load(std::memory_order_relaxed));
 	while (top) {
-		raw_ptr<node, Allocator> expected(top);
-		if (myTop.compare_exchange_strong(expected, top->myNext.load())) {
-			return top->myIndex;
+		raw_ptr<node> expected(top);
+		if (myTop.compare_exchange_strong(expected, top->myNext.load(std::memory_order_acquire), std::memory_order_relaxed)) {
+
+			const IndexType toReturn(top->myIndex);
+			
+			push_pool_entry(std::move(top));
+
+			return toReturn;
 		}
 	}
+
+	push_pool_entry(allocator);
 
 	return myIterator++;
 }
 template<class IndexType, class Allocator>
 inline void index_pool<IndexType, Allocator>::add(IndexType index)
 {
-	shared_ptr<node, Allocator> entry(make_shared<node, Allocator>(index, nullptr));
+	shared_ptr<node> entry(get_pool_entry());
+	entry->myIndex = index;
 
-	raw_ptr<node, Allocator> expected;
+	raw_ptr<node> expected;
 	do {
-		shared_ptr<node, Allocator> top(myTop.load());
+		shared_ptr<node> top(myTop.load());
 		expected = top.get_raw_ptr();
-		entry->myNext = std::move(top);
+		entry->myNext.unsafe_store(std::move(top));
 	} while (!myTop.compare_exchange_strong(expected, std::move(entry)));
 }
-template<class T, class Allocator>
-inline dummy_container<T, Allocator>::dummy_container()
-	: myDummyItem(item_state::Dummy)
-	, myDummyRawBuffer(1, &myDummyItem)
+template<class IndexType, class Allocator>
+inline void index_pool<IndexType, Allocator>::push_pool_entry(Allocator& allocator)
 {
-	myDummyBuffer = dummy_type{ &myDummyRawBuffer, [](buffer_type*, allocator_adapter_type&) {} };
+	shared_ptr<node> entry(make_shared<node, Allocator>(allocator, std::numeric_limits<IndexType>::max(), nullptr));
+
+	push_pool_entry(std::move(entry));
+}
+template<class IndexType, class Allocator>
+inline void index_pool<IndexType, Allocator>::push_pool_entry(shared_ptr<node> entry)
+{
+	shared_ptr<node> toInsert(std::move(entry));
+
+	raw_ptr<node> expected;
+	do {
+		shared_ptr<node> top(myTopPool.load(std::memory_order_acquire));
+		expected = top.get_raw_ptr();
+		toInsert->myNext = std::move(top);
+	} while (!myTopPool.compare_exchange_strong(expected, std::move(toInsert)));
+}
+template<class IndexType, class Allocator>
+inline shared_ptr<typename index_pool<IndexType, Allocator>::node> index_pool<IndexType, Allocator>::get_pool_entry()
+{
+	shared_ptr<node> top(myTopPool.load(std::memory_order_relaxed));
+	while (top) {
+		raw_ptr<node> expected(top);
+		if (myTopPool.compare_exchange_strong(expected, top->myNext.load(std::memory_order_acquire), std::memory_order_relaxed)) {
+			return top;
+		}
+	}
+
+	assert(false && "Pre allocated entries should be 1:1 to fetched indices");
+
+	return nullptr;
 }
 }
 template <class T, class Allocator>
 cqdetail::index_pool<typename concurrent_queue<T, Allocator>::size_type, typename concurrent_queue<T, Allocator>::allocator_type> concurrent_queue<T, Allocator>::ourIndexPool;
 template <class T, class Allocator>
-thread_local std::vector<typename concurrent_queue<T, Allocator>::shared_ptr_slot_type, typename concurrent_queue<T, Allocator>::producer_vector_allocator> concurrent_queue<T, Allocator>::ourProducers(0);
+thread_local std::vector<typename concurrent_queue<T, Allocator>::shared_ptr_slot_type, typename concurrent_queue<T, Allocator>::producer_vector_allocator> concurrent_queue<T, Allocator>::ourProducers;
 template <class T, class Allocator>
 thread_local std::vector<cqdetail::consumer_wrapper<typename concurrent_queue<T, Allocator>::shared_ptr_slot_type, typename concurrent_queue<T, Allocator>::shared_ptr_array_type>, typename concurrent_queue<T, Allocator>::consumer_vector_allocator> concurrent_queue<T, Allocator>::ourConsumers;
 template <class T, class Allocator>
