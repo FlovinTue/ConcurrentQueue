@@ -422,7 +422,7 @@ inline typename concurrent_queue<T, Allocator>::size_type concurrent_queue<T, Al
 {
 	const std::uint16_t producerCount(myProducerCount.load(std::memory_order_acquire));
 
-	atomic_shared_ptr_slot_type* const producerArray(myProducerSlots.unsafe_get_owned(std::memory_order_relaxed));
+	atomic_shared_ptr_slot_type* const producerArray(myProducerSlots.unsafe_get_owned());
 
 	size_type accumulatedSize(0);
 	for (std::uint16_t i = 0; i < producerCount; ++i) {
