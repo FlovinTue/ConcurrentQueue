@@ -771,7 +771,7 @@ inline typename concurrent_queue<T, Allocator>::shared_ptr_slot_type& concurrent
 		}
 		// Make sure to propagate instances of our allocator everywhere
 		else {
-			ourProducers = decltype(ourProducers)(myInitBufferCapacity + 1, ourDummyContainer.myDummyBuffer, myAllocator);
+			ourProducers = decltype(ourProducers)(myInstanceIndex + 1, ourDummyContainer.myDummyBuffer, myAllocator);
 		}
 	}
 	return ourProducers[myInstanceIndex];
