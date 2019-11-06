@@ -124,9 +124,6 @@ enum class item_state : std::uint8_t
 template <class Dummy>
 std::size_t log2_align(std::size_t from, std::size_t clamp);
 
-template <class T, class Allocator>
-std::size_t calc_block_size(std::size_t fromCapacity);
-
 template <class Dummy>
 inline std::uint8_t to_store_array_slot(std::uint16_t producerIndex);
 
