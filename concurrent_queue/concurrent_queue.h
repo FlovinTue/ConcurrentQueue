@@ -375,7 +375,7 @@ inline void concurrent_queue<T, Allocator>::unsafe_clear()
 
 	shared_ptr_array_type producerArray(myProducerSlots.unsafe_load(std::memory_order_relaxed));
 	for (std::uint16_t i = 0; i < myProducerCount.load(std::memory_order_relaxed); ++i) {
-		producerArray[i].unsafe_get_owned()->unsafe_clear();
+		producerArray[i].unsafe_get()->unsafe_clear();
 	}
 
 	std::atomic_thread_fence(std::memory_order_release);
@@ -397,7 +397,7 @@ inline void concurrent_queue<T, Allocator>::unsafe_reset()
 	myProducerSlotReservation.store(0, std::memory_order_relaxed);
 
 	for (std::uint16_t i = 0; i < producerCount; ++i) {
-		myProducerSlots.unsafe_get_owned()[i].unsafe_store(nullptr, std::memory_order_relaxed);
+		myProducerSlots.unsafe_get()[i].unsafe_store(nullptr, std::memory_order_relaxed);
 	}
 
 	std::atomic_thread_fence(std::memory_order_release);
@@ -421,11 +421,11 @@ inline typename concurrent_queue<T, Allocator>::size_type concurrent_queue<T, Al
 {
 	const std::uint16_t producerCount(myProducerCount.load(std::memory_order_acquire));
 
-	atomic_shared_ptr_slot_type* const producerArray(myProducerSlots.unsafe_get_owned());
+	atomic_shared_ptr_slot_type* const producerArray(myProducerSlots.unsafe_get());
 
 	size_type accumulatedSize(0);
 	for (std::uint16_t i = 0; i < producerCount; ++i) {
-		const buffer_type* const slot(producerArray[i].unsafe_get_owned());
+		const buffer_type* const slot(producerArray[i].unsafe_get());
 		accumulatedSize += slot->size();
 	}
 	return accumulatedSize;
@@ -662,7 +662,7 @@ inline bool concurrent_queue<T, Allocator>::has_producer_array_been_superceeded(
 	}
 
 	for (std::uint8_t higherStoreSlot = arraySlot + 1; higherStoreSlot < cqdetail::Producer_Slots_Max_Growth_Count; ++higherStoreSlot) {
-		if (myProducerArrayStore[higherStoreSlot].load(std::memory_order_relaxed).get_owned() == activeArray.get_owned()) {
+		if (myProducerArrayStore[higherStoreSlot].load(std::memory_order_relaxed).get() == activeArray.get()) {
 			return true;
 		}
 	}
@@ -960,7 +960,7 @@ inline void producer_buffer<T, Allocator>::invalidate()
 {
 	myDataBlock[myWriteSlot % myCapacity].set_state(item_state::Dummy);
 	if (myNext) {
-		myNext.unsafe_get_owned()->invalidate();
+		myNext.unsafe_get()->invalidate();
 	}
 }
 template<class T, class Allocator>
@@ -985,7 +985,7 @@ inline typename producer_buffer<T, Allocator>::shared_ptr_slot_type producer_buf
 		}
 
 		back = inspect->myNext.load(std::memory_order_seq_cst);
-		inspect = back.get_owned();
+		inspect = back.get();
 	}
 	return back;
 }
@@ -998,7 +998,7 @@ inline typename producer_buffer<T, Allocator>::size_type producer_buffer<T, Allo
 	accumulatedSize -= readSlot;
 
 	if (myNext)
-		accumulatedSize += myNext.unsafe_get_owned()->size();
+		accumulatedSize += myNext.unsafe_get()->size();
 
 	return accumulatedSize;
 }
@@ -1036,9 +1036,9 @@ inline bool producer_buffer<T, Allocator>::verify_successor(const shared_ptr_slo
 		}
 
 		next = inspect->myNext.load(std::memory_order_seq_cst);
-		inspect = next.get_owned();
+		inspect = next.get();
 
-		if (inspect == successor.get_owned()) {
+		if (inspect == successor.get()) {
 			break;
 		}
 	} while (inspect->myNext);
@@ -1090,7 +1090,7 @@ inline void producer_buffer<T, Allocator>::push_front(shared_ptr_slot_type newBu
 	producer_buffer<T, allocator_type>* last(this);
 
 	while (last->myNext) {
-		last = last->myNext.unsafe_get_owned();
+		last = last->myNext.unsafe_get();
 	}
 
 	last->myNext.store(std::move(newBuffer), std::memory_order_seq_cst);
@@ -1113,7 +1113,7 @@ inline void producer_buffer<T, Allocator>::unsafe_clear()
 	myPostReadIterator.store(postWrite, std::memory_order_relaxed);
 #endif
 	if (myNext) {
-		myNext.unsafe_get_owned()->unsafe_clear();
+		myNext.unsafe_get()->unsafe_clear();
 	}
 }
 template<class T, class Allocator>
@@ -1681,8 +1681,7 @@ inline IndexType index_pool<IndexType, Allocator>::get(Allocator& allocator)
 {
 	shared_ptr<node> top(myTop.load(std::memory_order_relaxed));
 	while (top) {
-		raw_ptr<node> expected(top);
-		if (myTop.compare_exchange_strong(expected, top->myNext.load(std::memory_order_acquire), std::memory_order_relaxed)) {
+		if (myTop.compare_exchange_strong(top, top->myNext.load(std::memory_order_acquire), std::memory_order_relaxed)) {
 
 			const IndexType toReturn(top->myIndex);
 
